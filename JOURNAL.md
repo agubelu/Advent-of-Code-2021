@@ -5,7 +5,7 @@ As stated, my goal is to minimize the runtime of all days without deviating *too
 I'll keep updating this file with some commentary and discussion every day.
 
 ---
-**[Day 1](#day-1):** 0.1374 ms
+**[Day 1](#day-1):** 0.1367 ms
 
 ---
 # Day 1
@@ -20,7 +20,7 @@ Great! In that case, Part 1 is a simple one-liner:
 let sol1 = numbers.windows(2).filter(|x| x[1] > x[0]).count() as u64;
 ```
 
-In this case, the `u64` cast occurs because the type that I use to represent numeric solutions is `u64`, while `count()` returns `usize`. Anyways, I reckon in 64-bit system this should be a no-op.
+In this case, the `u64` cast occurs because the type that I use to represent numeric solutions is `u64`, while `count()` returns `usize`. Anyways, I reckon in 64-bit systems this should be a no-op.
 
 We can also use `windows()` for the bigger windows of part 2. In this case, my idea was to first get the windows, then map them to their respective sums, and then `window()` again over them to filter and count the pairs. This way, I avoid having to sum all 3-windows twice.
 
@@ -73,3 +73,21 @@ read_to_string("input/day01.txt").unwrap().lines()
 ```
 
 This very verbose solution runs at around 0.11ms. While faster, I think we can sacrify 0.02 milliseconds for the sake of more concise and easy to read code.
+
+EDIT: It has been pointed out to me on Twitter that part 2 can be simplified, since you only need to compare the number that changes when the window slides. So, we dont need to actually sum the numbers in the window, and both parts can be simplified to a generalization, where you compare pairs of numbers in the input separated by a certain distance.
+
+This new solution is very elegant:
+```rust
+fn get_sol(ls: &[u32], diff: usize) -> u64 {
+    ls.iter().zip(ls[diff..].iter()).filter(|(a, b)| b > a).count() as u64
+}
+
+let sol1 = get_sol(&numbers, 1);
+let sol2 = get_sol(&numbers, 3);
+```
+
+The runtime didn't change too much, since the bottleneck is clearly reading the file from disk, but it provided a tiny improvement:
+
+![Day 1 results](imgs/d01_1.png)
+
+Kudos to [@ajiiisai](https://github.com/ajiiisai) for discovering this neat trick!
