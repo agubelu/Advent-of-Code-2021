@@ -18,8 +18,7 @@ fn main() {
         panic!("Please provide the day to run as a command-line argument.");
     }
 
-    let days: Vec<u8> = args.iter()
-        .skip(1)
+    let days: Vec<u8> = args[1..].iter()
         .map(|x| x.parse().unwrap_or_else(|v| panic!("Not a valid day: {}", v)))
         .collect();
 
@@ -70,6 +69,6 @@ fn get_day_solver(day: u8) -> fn() -> SolutionPair {
         23 => day23::solve,
         24 => day24::solve,
         25 => day25::solve,
-            _ => unimplemented!(),
+         _ => unimplemented!(),
     }
 }

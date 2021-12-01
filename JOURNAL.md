@@ -5,3 +5,71 @@ As stated, my goal is to minimize the runtime of all days without deviating *too
 I'll keep updating this file with some commentary and discussion every day.
 
 ---
+**[Day 1](#day-1):** 0.1374 ms
+
+---
+# Day 1
+
+First day! As usual, the first challenge is pretty simple. In this case, it involves sliding through a list of numbers with different window sizes.
+
+My first intuition for part 1 was to `.zip()` both the numbers vector `numbers` and `numbers[1..]` to create the size 2 windows. While not technically incorrect, upon reading part 2, I learned that, conveniently, Rust already includes a `windows()` method that creates sliding windows over a slice.
+
+Great! In that case, Part 1 is a simple one-liner:
+
+```rust
+let sol1 = numbers.windows(2).filter(|x| x[1] > x[0]).count() as u64;
+```
+
+In this case, the `u64` cast occurs because the type that I use to represent numeric solutions is `u64`, while `count()` returns `usize`. Anyways, I reckon in 64-bit system this should be a no-op.
+
+We can also use `windows()` for the bigger windows of part 2. In this case, my idea was to first get the windows, then map them to their respective sums, and then `window()` again over them to filter and count the pairs. This way, I avoid having to sum all 3-windows twice.
+
+However, `windows()` cannot be used on map iterators. Thankfully, the great [itertools crate](https://docs.rs/itertools/latest/itertools/) provides `tuple_windows()` on any iterator:
+
+```rust
+let sol2 = numbers.windows(3).map(|x| x.iter().sum())
+        .tuple_windows::<(u32, u32)>()
+        .filter(|(a, b)| b > a)
+        .count() as u64;
+```
+
+The result is 0.1374ms, and as expected, most of it is spent reading the file.
+
+![Day 1 results](imgs/d01.png)
+
+Can we do better? Yes. Should we? Well, the main optimization here that comes to mind is doing all operations as we are reading the file. In that case, we can arrive to both answers as soon as we finish reading the last line, by manually keeping track of the windows and previous values. Something like...
+
+```rust
+let mut win3 = [0, 0, 0];
+let mut prev_win = 0;
+let mut prev = 0;
+let mut sol1 = 0;
+let mut sol2 = 0;
+
+read_to_string("input/day01.txt").unwrap().lines()
+    .enumerate()
+    .for_each(|(i, line)| {
+        let val = line.parse::<u32>().unwrap();
+
+        // Update the counter for part 1
+        if i > 0 {
+            if val > prev {
+                sol1 += 1;
+            }
+            prev = val;
+        }
+
+        // Update the sliding window
+        win3[i % 3] = val;
+        let sum = win3.iter().sum();
+
+        // If we have at least two full windows, compare it with the previous one
+        if i > 3 && sum > prev_win {
+            sol2 += 1;
+        }
+
+        prev_win = sum;
+    });
+```
+
+This very verbose solution runs at around 0.11ms. While faster, I think we can sacrify 0.02 milliseconds for the sake of more concise and easy to read code.
