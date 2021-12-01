@@ -15,6 +15,7 @@ pub fn solve() -> SolutionPair {
     (Solution::UInt(sol1), Solution::UInt(sol2))
 }
 
-fn get_sol(ls: &[u32], diff: usize) -> u64 {
-    ls.iter().zip(ls[diff..].iter()).filter(|(a, b)| b > a).count() as u64
+fn get_sol(ls: &[u32], n: usize) -> u64 {
+    ls.windows(n+1).filter(|x| x[n] > x[0]).count() as u64
 }
+
