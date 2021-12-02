@@ -4,8 +4,11 @@ As stated, my goal is to minimize the runtime of all days without deviating *too
 
 I'll keep updating this file with some commentary and discussion every day.
 
+Of course, expect spoilers if you keep reading!
+
 ---
-**[Day 1](#day-1):** 0.1367 ms
+* **[Day 1](#day-1):** 0.1367 ms
+* **[Day 2](#day-2):** 0.1269 ms
 
 ---
 # Day 1
@@ -91,3 +94,67 @@ The runtime didn't change too much, since the bottleneck is clearly reading the 
 ![Day 1 results](imgs/d01_1.png)
 
 Kudos to [@ajiiisai](https://github.com/ajiiisai) for discovering this neat trick!
+
+# Day 2
+
+Today is one of those "follow these pseudo-instructions and update some values" days. We have to move a submarine up, down and forward, and the twist in part 2 is that the depth is calculated differently, using some "aim" that you update when you go up and down.
+
+At first, I implemented this declarative version to have some sort of baseline to compare against:
+
+```rust
+let (mut hor, mut aim, mut depth1, mut depth2) = (0, 0, 0, 0);
+read_to_string("input/day02.txt").unwrap()
+    .lines()
+    .for_each(|line| {
+        let spl: Vec<&str> = line.split(' ').collect();
+        let val: i64 = spl[1].parse().unwrap();
+
+        match spl[0] {
+            "forward" => {
+                hor += val;
+                depth2 += aim * val;
+            },
+            "down" => {
+                depth1 += val;
+                aim += val;
+            },
+            "up" => {
+                depth1 -= val;
+                aim -= val;
+            },
+            _ => unreachable!()
+        }
+    });
+```
+
+The previous code does both parts at once, by updating whatever is necessary each step. This clocks in at around 0.256ms.
+
+So, to try to make it both faster and prettier, I tried using iterators. If there's something I learned about iterators in Rust, it is that 1) they are your friends, and 2) they go brrrrr.
+
+In that case, we can first convert each instruction to some kind of (x, y) pair, where moving forward is (x, 0) and moving up/down is (0, y). Then we apply the previous algorithm in a more functional way, by folding the iterator and updating the accumulated values:
+
+```rust
+let (hor, _, depth1, depth2) = read_to_string("input/day02.txt").unwrap()
+    .lines()
+    .map(|line| {
+        let mut spl = line.split(' ');
+        let op = spl.next().unwrap();
+        let val: i64 = spl.next().unwrap().parse().unwrap();
+        match op {
+            "forward" => (val, 0),
+            "up" => (0, -val),
+            "down" => (0, val),
+            _ => unreachable!()
+        }
+    }).fold((0, 0, 0, 0), |(hor, aim, depth1, depth2), mv| {
+        match mv {
+            (x, 0) => (hor + x, aim, depth1, depth2 + aim * x),
+            (0, y) => (hor, aim + y, depth1 + y, depth2),
+            _ => unreachable!()
+        }
+    });
+```
+
+I'm pretty happy with this solution. It's shorter, looks prettier, and indeed, iterators go brrrr:
+
+![Day 2 results](imgs/d02.png)
