@@ -11,6 +11,7 @@ Of course, expect spoilers if you keep reading!
 * **[Day 2](#day-2):** 0.1269 ms
 * **[Day 3](#day-3):** 0.1215 ms
 * **[Day 4](#day-4):** 0.1856 ms
+* **[Day 5](#day-5):** 6.6105 ms
 
 ---
 
@@ -341,3 +342,138 @@ let sol2 = boards[losing_board_index].get_score(losing_row_pos, &numbers);
 For a total of 0.1856ms. The slowest part is apparently parsing spaces in the string (`.split_ascii_whitespace()`). `.split(' ')` doesn't work because, in order to be prettier, the input sometimes adds more than one space between the numbers. Splitting and then filtering for non-empty strings is roughly the same.
 
 ![Day 4 results](imgs/d04.png)
+
+# Day 5
+
+Today, we're basically given pairs of (x, y) coordinates, defining line segments, and we must find out how many points are shared by 2 or more of those segments. Initially, we must only consider horizontal or vertical lines. I thought part 2 would involve any kind of diagonals, but it turns out all diagonals are exactly 45 degrees, which makes things way easier.
+
+Let's dive a bit into the data structures. We have coordinates (x, y) and pairs of coordinates defined in every line:
+
+```rust
+type CoordType = i16;
+type CoordTuple = (CoordType, CoordType);
+
+struct Coord {
+    pub x: CoordType,
+    pub y: CoordType
+}
+
+struct CoordPair {
+    pub start: Coord,
+    pub end: Coord
+}
+```
+
+I defined a constructor from string for both the coordinates and the pairs, to easily map the lines of the input file into pairs of coordinates:
+
+```rust
+impl CoordPair {
+    pub fn from_line(line: &str) -> Self {
+        let mut spl = line.split(" -> ");
+        let start = Coord::from_str(spl.next().unwrap());
+        let end = Coord::from_str(spl.next().unwrap());
+        Self { start, end }
+    }
+}
+
+impl Coord {
+    pub fn from_str(s: &str) -> Self {
+        let mut spl = s.split(',');
+        let x = spl.next().unwrap().parse().unwrap();
+        let y = spl.next().unwrap().parse().unwrap();
+        Self { x, y }
+    }
+}
+```
+
+As it turns out, the splits make things a bit slower (around 1ms), but as we'll see, it doesnt matter too much in the grand scheme of this day.
+
+Wouldn't it be useful to have a method to determine if a segment is vertical or horizontal, to filter them out for part 1?
+
+```rust
+impl CoordPair {
+    pub fn is_not_diagonal(&self) -> bool {
+        self.start.x == self.end.x || self.start.y == self.end.y
+    }
+}
+```
+
+Now, let's handle the actual problem today: how do we generate the points that are contained in the segments? Since all segments are either vertical, horizontal or 45 degrees, we can go from `start` to `end` through every point by adding 1, 0 or -1 to each coordinate, depending on whether the end coordinate is greater or smaller than the start coordinate.
+
+To take care of this process, I created an iterator to get all the points in a given segment:
+
+```rust
+struct PointIter {
+    current: Coord,
+    target: Coord,
+    step: Coord,
+}
+
+impl Iterator for PointIter {
+    type Item = CoordTuple;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self.current {
+            point if point == self.target => None,
+            point => {
+                self.current.x += self.step.x;
+                self.current.y += self.step.y;
+                Some((point.x, point.y))
+            }
+        }
+    }
+}
+
+impl CoordPair {
+    pub fn points_iter(&self) -> PointIter {
+        let step = Coord{ x: diff(self.start.x, self.end.x), y: diff(self.start.y, self.end.y) };
+        let target = Coord {x: self.end.x + step.x, y: self.end.y + step.y};
+        PointIter { current: self.start, target, step }
+    }
+}
+```
+
+`diff()` returns -1, 0 or 1 depending on whether the first parameter is greater, equal or lower than the second, respectively.
+
+After we've built these data structures, the calculation is relatively straightforward. Convert all lines to pairs of coordinates, get all points between them, add them to a map that keeps track of the amount of times each one has appeared, and get how many have appeared 2 times or more:
+
+```rust
+pub fn solve() -> SolutionPair {
+    let mut points_count = FxHashMap::default();
+
+    read_to_string("input/day05.txt").unwrap()
+        .lines()
+        .map(CoordPair::from_line)
+        .for_each(|coord| {
+            let points = coord.points_iter();
+            let cnt = (if coord.is_not_diagonal() {1} else {0}, 1);
+
+            points.for_each(|p| {
+                let x = points_count.entry(p).or_insert((0, 0));
+                *x = (x.0 + cnt.0, x.1 + cnt.1);
+            });
+        });
+
+
+    let (sol1, sol2) = count_shared_points(&points_count);
+    (Solution::UInt(sol1), Solution::UInt(sol2))
+}
+
+fn count_shared_points(map: &FxHashMap<CoordTuple, (u32, u32)>) -> (u64, u64) {
+    map.values().fold((0, 0), |(sol1, sol2), (cnt1, cnt2)| {
+        let next1 = if *cnt1 >= 2 {sol1 + 1} else {sol1};
+        let next2 = if *cnt2 >= 2 {sol2 + 1} else {sol2};
+        (next1, next2)
+    })
+}
+```
+
+There are a few design decisions here that are consequences of some experiments I did. I tried using the [Counter crate](https://docs.rs/counter/latest/counter/), but it was a bit too slow (~10ms), so I decided to use FxHashMaps from the [rustc-hash crate](https://docs.rs/rustc-hash/latest/rustc_hash/) and updating them myself. This crate provides HashSets and HashMaps using a hash function that is faster than that provided by the equivalent collections in `std::collections`. It has the downside of not being cryptographically secure, but that is not a property we need.
+
+The whole hashing process is obviously the bottleneck today. My initial approach is keeping two hashmaps, one for each part. However, that means we have to hash each point twice. So instead, I use a single HashMap, where the values are the counts for parts 1 and 2 at the same time. The counter for part 2 is incremented inconditionally, while that for part 1 is only incremented if the segment is not diagonal.
+
+Finally, we can count the number of points that appear 2 times or more for both solutions at once by folding the iterator manually and incrementing the values when needed.
+
+This is the slowest one so far, with 6.6105ms. I can't think of any ways to avoid using the map right know, but I'll update this if I find an interesting optimization.
+
+![Day 5 results](imgs/d05.png)
