@@ -4,6 +4,7 @@ use Solution::*;
 pub enum Solution {
     Int(i64),
     UInt(u64),
+    BigUInt(u128),
     Str(String)
 }
 
@@ -12,6 +13,7 @@ impl Display for Solution {
         match self {
             Int(i) => i.fmt(f),
             UInt(u) => u.fmt(f),
+            BigUInt(u) => u.fmt(f),
             Str(s) => s.fmt(f),
         }
     }

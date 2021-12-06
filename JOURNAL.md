@@ -12,6 +12,7 @@ Of course, expect spoilers if you keep reading!
 * **[Day 3](#day-3):** 0.1215 ms
 * **[Day 4](#day-4):** 0.1856 ms
 * **[Day 5](#day-5):** 6.6105 ms
+* **[Day 6](#day-6):** 0.0884 ms
 
 ---
 
@@ -477,3 +478,61 @@ Finally, we can count the number of points that appear 2 times or more for both 
 This is the slowest one so far, with 6.6105ms. I can't think of any ways to avoid using the map right know, but I'll update this if I find an interesting optimization.
 
 ![Day 5 results](imgs/d05.png)
+
+# Day 6
+
+Today's one was relatively easy: we have a certain initial population of lanternfish, and we're told that each lanternfish produces another one every 6 days. However, their internal "clocks" are not all in sync, and additionally, every new lanternfish takes 2 more days to produce their first offspring, and after that they start their regular 6 day cycle.
+
+I tried to come up with an equation to solve it analytically for like 5 minutes, but the +2 in the internal timer when a new fish is born made it a bit too hard for me. We're straight up told that this problem has an exponential growth, and conveniently, the problem statement lures you into a representation of the problem that does not scale too well.
+
+As I said previously, the key to solving a problem efficiently is to come up with a good representation of it (and something I like a lot about Rust is that it makes you devote time to thinking about the data structures). I think the following code is pretty easy to follow:
+
+```rust
+struct FishTank {
+    fish: [u128; 9]
+}
+
+impl FishTank {
+    pub fn advance(&mut self, steps: u64) {
+        for _ in 0..steps {
+            self.step();
+        }
+    }
+
+    fn step(&mut self) {
+        let zeros = self.fish[0];
+        for i in 1..9 {
+            self.fish[i-1] = self.fish[i];
+        }
+        self.fish[8] = zeros;
+        self.fish[6] += zeros;
+    }
+}
+```
+
+Instead of keeping a list of all the fish represented as their internal timers, as the problem statement does, a much nicer way to represent this is to keep track of *how many fish* are in a certain moment of the period. Since the maximum internal clock a fish can have is 8, we can have an array of size 9, where position 0 represents the amount of fish whose timer is 0, and so on.
+
+The way to advance one day is to push all the values forward in the array, which represents moving forward all the fish's internal clocks. Special care must be put to those that are in position 0: they reset to 6, and produce one new fish with an internal clock of 8. Hence, we copy the value in `fish[0]` to `fish[8]`, to add the new batch of lanternfish, and add their count to those whose clock is 6.
+
+I chose to use `u128` to be extra careful, as the values seemed to escalate pretty quickly, as expected in an exponential series. However, it turns out `u64` is enough, but I`ll leave this way for compatibility with bigger inputs or larger time periods.
+
+Overall, the main function is very simple...
+
+```rust
+pub fn solve() -> SolutionPair {
+    let input = read_to_string("input/day06.txt").unwrap();
+    let mut tank = FishTank::from_string(&input);
+
+    tank.advance(80);
+    let sol1 = tank.count_fish();
+
+    tank.advance(256 - 80);
+    let sol2 = tank.count_fish();
+
+    (Solution::BigUInt(sol1), Solution::BigUInt(sol2))
+}
+```
+
+And clocks in at a blazing fast 0.0884 milliseconds, the fastest one yet to make up for yesterday's :)
+
+![Day 6 results](imgs/d06.png)
