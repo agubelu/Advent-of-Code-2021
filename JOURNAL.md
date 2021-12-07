@@ -13,6 +13,7 @@ Of course, expect spoilers if you keep reading!
 * **[Day 4](#day-4):** 0.1856 ms
 * **[Day 5](#day-5):** 6.6105 ms
 * **[Day 6](#day-6):** 0.0884 ms
+* **[Day 7](#day-7):** 0.1113 ms
 
 ---
 
@@ -536,3 +537,51 @@ pub fn solve() -> SolutionPair {
 And clocks in at a blazing fast 0.0884 milliseconds, the fastest one yet to make up for yesterday's :)
 
 ![Day 6 results](imgs/d06.png)
+
+# Day 7
+
+Today's problem was very easy, but interesting nonetheless. We have the positions of a bunch of crabs on an axis, and we must basically find the position that minimizes the sum of the distances to all crabs. For part 2, the distance is computed differently: 1 step equals 1, 2 steps are 1+2, 3 steps are 1+2+3, and so on.
+
+Before showing any code, I'll explain the progress my solution went through. First, I coded the obvious approach with a for loop: going from 0 to the maximum value where a crab is, analyzing the cost in each step, and then picking the lowest one. Part 2 was the same, changing the function used to evaluate the cost of moving a crab. I also remembered that `1+2+...+N` can be computed as `N * (N+1) / 2` for part 2 (however, if you do `(1..n).into_iter().sum()` in Rust, the compiler will optimize it to the previous expression anyway).
+
+It works, but the complexity is really bad, and it took around 3ms. After some research, I learned that [it can be proven that the value which minimizes the absolute distances to all other values in a list is the median](https://math.stackexchange.com/questions/113270/the-median-minimizes-the-sum-of-absolute-deviations-the-ell-1-norm). So, we can skip the for in part 1 and simply sort the list, pick the median (which is the value in the middle of the sorted list), and compute the cost for that value.
+
+Very nice. Can we do anything similar to avoid looping in part 2? This is where it got interesting. Out of pure intuition, I tried using the average value instead of the median to compute part 2 on that value. It worked. I had no clue why it worked.
+
+I tried to come up with a proof of why the average value minimizes the n(n+1) sums, but I gave up after a while. I was unsure whether this was a simple oddity or an actual general solution that will work every time.
+
+[Someone on reddit](https://www.reddit.com/r/adventofcode/comments/rar7ty/2021_day_7_solutions/hnkbtug/) showed that the best value is guaranteed to be within 0.5 of the average value. This means that we can round the average, and it will indeed be the best value to compute part 2.
+
+All in all, after learning all this, it's a simple solution:
+
+```rust
+pub fn solve() -> SolutionPair {
+    let mut crabs: Vec<i32> = read_to_string("input/day07.txt").unwrap()
+        .split(',')
+        .map(|x| x.parse().unwrap())
+        .collect();
+
+    crabs.sort_unstable(); //_unstable is faster for primitives such as i32
+    let median = crabs[crabs.len() / 2];
+    let sol1 = get_sol1_for_pos(&crabs, median);
+
+    let avg = (crabs.iter().sum::<i32>() as f32 / crabs.len() as f32).round() as i32;
+    let sol2 = get_sol2_for_pos(&crabs, avg as i32);
+   
+    (Solution::Int32(sol1), Solution::Int32(sol2))
+}
+
+fn get_sol1_for_pos(crabs: &[i32], pos: i32) -> i32 {
+    crabs.iter().map(|x| (x-pos).abs()).sum()
+}
+
+fn get_sol2_for_pos(crabs: &[i32], pos: i32) -> i32 {
+    crabs.iter().map(|x| {
+        let diff = (x-pos).abs();
+        diff * (diff + 1) / 2
+    }).sum()
+}
+```
+
+And avoiding loops gives us a runtime that is more in line with the rest of the days. Today's problem was easy to solve initially, but it's one of those days where you learn something interesting.
+![Day 6 results](imgs/d07.png)
