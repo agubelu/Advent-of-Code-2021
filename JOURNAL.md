@@ -11,7 +11,7 @@ Of course, expect spoilers if you keep reading!
 * **[Day 2](#day-2):** 0.1269 ms
 * **[Day 3](#day-3):** 0.1215 ms
 * **[Day 4](#day-4):** 0.1856 ms
-* **[Day 5](#day-5):** 6.6105 ms
+* **[Day 5](#day-5):** 2.3766 ms
 * **[Day 6](#day-6):** 0.0884 ms
 * **[Day 7](#day-7):** 0.1113 ms
 
@@ -479,6 +479,120 @@ Finally, we can count the number of points that appear 2 times or more for both 
 This is the slowest one so far, with 6.6105ms. I can't think of any ways to avoid using the map right know, but I'll update this if I find an interesting optimization.
 
 ![Day 5 results](imgs/d05.png)
+
+**UPDATE:** I came back to this day to try to make it run a bit faster. I thought about using a Vec to store how many times a point appears, which is much faster to access than a map, but this approach scales relatively poorly in terms of memory. The idea is to access a 2D coordinate in the array by computing its index as `y * <number of columns> + x`. To make sure that all possible `(x, y)` combinations have their own position in the array, it must be of size `m^2`, where `m` is the highest coordinate of any point.
+
+Though in this case that is around 1000 and it would work, it would need too much memory if any single coordinate is too big, and I want my code to also work for bigger inputs. So, my idea was... what if we could use both?
+
+Introducing... the `PointCounter` trait:
+
+```rust
+trait PointCounter {
+    fn update(&mut self, point: Coord, increment: Coord);
+    fn count(&self) -> Coord;
+}
+```
+
+This defines a common interface that any point counter can implement with different backups. We can have one that uses a vec...
+
+```rust
+struct VecCounter {
+    row_size: usize,
+    counter: Vec<Coord>
+}
+
+impl VecCounter {
+    pub fn new(max: CoordType) -> Self {
+        let row_size = max as usize + 1;
+        let counter = vec![Coord::zero(); row_size * row_size];
+        Self { row_size, counter }
+    }
+}
+
+impl PointCounter for VecCounter {
+    fn update(&mut self, point: Coord, increment: Coord) {
+        self.counter[point.y as usize * self.row_size + point.x as usize].increment(increment);
+    }
+
+    fn count(&self) -> Coord {
+        self.counter.iter().fold(Coord::zero(), |acc, count| {
+            let x = if count.x >= 2 {acc.x + 1} else {acc.x};
+            let y = if count.y >= 2 {acc.y + 1} else {acc.y};
+            Coord { x, y }
+        })
+    }
+}
+```
+
+... and another one that uses a map...
+
+```rust
+struct MapCounter {
+    counter: FxHashMap<Coord, Coord>
+}
+
+impl MapCounter {
+    pub fn new() -> Self {
+        Self { counter: FxHashMap::default() }
+    }
+}
+
+impl PointCounter for MapCounter {
+    fn update(&mut self, point: Coord, increment: Coord) {
+        self.counter.entry(point).or_insert_with(Coord::zero).increment(increment);
+    }
+
+    fn count(&self) -> Coord {
+        self.counter.values().fold(Coord::zero(), |acc, count| {
+            let x = if count.x >= 2 {acc.x + 1} else {acc.x};
+            let y = if count.y >= 2 {acc.y + 1} else {acc.y};
+            Coord { x, y }
+        })
+    }
+}
+```
+
+I also made some other changes, such as using a `Coord` as a conter for both parts. Now, we can define a function that solves the problem using any point counter backend:
+
+```rust
+fn solve_with(coords: &[CoordPair], mut solver: impl PointCounter) -> (u64, u64) {
+    coords.iter().for_each(|coord| {
+        let inc_1 = if coord.is_not_diagonal() {1} else {0};
+        let increment = Coord {x: inc_1, y: 1};
+
+        coord.points_iter().for_each(|p| solver.update(p, increment));
+    });
+
+    let counters = solver.count();
+    (counters.x as u64, counters.y as u64)
+}
+```
+
+
+And decide which backend to use on the fly, depending on the input:
+
+```rust
+pub fn solve() -> SolutionPair {
+    let coords = read_to_string("input/day05.txt").unwrap()
+        .lines()
+        .map(CoordPair::from_line)
+        .collect_vec();
+        
+    let max = coords.iter().map(|x| x.max()).max().unwrap();
+
+    let (sol1, sol2) = if max <= 1000 {
+        solve_with(&coords, VecCounter::new(max))
+    } else {
+        solve_with(&coords, MapCounter::new())
+    };
+
+    (Solution::UInt(sol1), Solution::UInt(sol2))
+}
+```
+
+Maybe it's a bit overengineered, but I think it's pretty neat, being both fast and flexible. And the runtime for our input is now...
+
+![Day 5 results 2](imgs/d05_1.png)
 
 # Day 6
 

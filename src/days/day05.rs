@@ -1,46 +1,51 @@
 use std::fs::read_to_string;
-use std::cmp::Ordering::*;
+use std::cmp::{Ordering::*, max};
 use rustc_hash::FxHashMap;
+use itertools::Itertools;
 
 use crate::{Solution, SolutionPair};
 
 ///////////////////////////////////////////////////////////////////////////////
 
-pub fn solve() -> SolutionPair {
-    let mut points_count = FxHashMap::default();
+type CoordType = i16;
 
-    read_to_string("input/day05.txt").unwrap()
+trait PointCounter {
+    fn update(&mut self, point: Coord, increment: Coord);
+    fn count(&self) -> Coord;
+}
+
+pub fn solve() -> SolutionPair {
+    let coords = read_to_string("input/day05.txt").unwrap()
         .lines()
         .map(CoordPair::from_line)
-        .for_each(|coord| {
-            let points = coord.points_iter();
-            let cnt = (if coord.is_not_diagonal() {1} else {0}, 1);
+        .collect_vec();
+        
+    let max = coords.iter().map(|x| x.max()).max().unwrap();
 
-            points.for_each(|p| {
-                let x = points_count.entry(p).or_insert((0, 0));
-                *x = (x.0 + cnt.0, x.1 + cnt.1);
-            });
-        });
+    let (sol1, sol2) = if max <= 1000 {
+        solve_with(&coords, VecCounter::new(max))
+    } else {
+        solve_with(&coords, MapCounter::new())
+    };
 
-
-    let (sol1, sol2) = count_shared_points(&points_count);
     (Solution::UInt(sol1), Solution::UInt(sol2))
 }
 
-fn count_shared_points(map: &FxHashMap<CoordTuple, (u32, u32)>) -> (u64, u64) {
-    map.values().fold((0, 0), |(sol1, sol2), (cnt1, cnt2)| {
-        let next1 = if *cnt1 >= 2 {sol1 + 1} else {sol1};
-        let next2 = if *cnt2 >= 2 {sol2 + 1} else {sol2};
-        (next1, next2)
-    })
+fn solve_with(coords: &[CoordPair], mut solver: impl PointCounter) -> (u64, u64) {
+    coords.iter().for_each(|coord| {
+        let inc_1 = if coord.is_not_diagonal() {1} else {0};
+        let increment = Coord {x: inc_1, y: 1};
+
+        coord.points_iter().for_each(|p| solver.update(p, increment));
+    });
+
+    let counters = solver.count();
+    (counters.x as u64, counters.y as u64)
 }
 
 ///////////////////////////////////////////////////////////////////////////////
 
-type CoordType = i16;
-type CoordTuple = (CoordType, CoordType);
-
-#[derive(Copy, Clone, PartialEq)]
+#[derive(Copy, Clone, PartialEq, Eq, Hash)]
 struct Coord {
     pub x: CoordType,
     pub y: CoordType
@@ -59,6 +64,61 @@ struct PointIter {
     step: Coord,
 }
 
+struct VecCounter {
+    row_size: usize,
+    counter: Vec<Coord>
+}
+
+struct MapCounter {
+    counter: FxHashMap<Coord, Coord>
+}
+
+///////////////////////////////////////////////////////////////////////////////
+
+impl VecCounter {
+    pub fn new(max: CoordType) -> Self {
+        let row_size = max as usize + 1;
+        let counter = vec![Coord::zero(); row_size * row_size];
+        Self { row_size, counter }
+    }
+}
+
+impl PointCounter for VecCounter {
+    fn update(&mut self, point: Coord, increment: Coord) {
+        self.counter[point.y as usize * self.row_size + point.x as usize].increment(increment);
+    }
+
+    fn count(&self) -> Coord {
+        self.counter.iter().fold(Coord::zero(), |acc, count| {
+            let x = if count.x >= 2 {acc.x + 1} else {acc.x};
+            let y = if count.y >= 2 {acc.y + 1} else {acc.y};
+            Coord { x, y }
+        })
+    }
+}
+
+impl MapCounter {
+    pub fn new() -> Self {
+        Self { counter: FxHashMap::default() }
+    }
+}
+
+impl PointCounter for MapCounter {
+    fn update(&mut self, point: Coord, increment: Coord) {
+        self.counter.entry(point).or_insert_with(Coord::zero).increment(increment);
+    }
+
+    fn count(&self) -> Coord {
+        self.counter.values().fold(Coord::zero(), |acc, count| {
+            let x = if count.x >= 2 {acc.x + 1} else {acc.x};
+            let y = if count.y >= 2 {acc.y + 1} else {acc.y};
+            Coord { x, y }
+        })
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////////
+
 impl CoordPair {
     pub fn from_line(line: &str) -> Self {
         let mut spl = line.split(" -> ");
@@ -76,29 +136,45 @@ impl CoordPair {
         let target = Coord {x: self.end.x + step.x, y: self.end.y + step.y};
         PointIter { current: self.start, target, step }
     }
+
+    pub fn max(&self) -> CoordType {
+        max(self.start.max(), self.end.max())
+    }
 }
 
 impl Iterator for PointIter {
-    type Item = CoordTuple;
+    type Item = Coord;
 
     fn next(&mut self) -> Option<Self::Item> {
         match self.current {
             point if point == self.target => None,
             point => {
-                self.current.x += self.step.x;
-                self.current.y += self.step.y;
-                Some((point.x, point.y))
+                self.current.increment(self.step);
+                Some(point)
             }
         }
     }
 }
 
 impl Coord {
+    pub fn zero() -> Self {
+        Self { x: 0, y: 0 }
+    }
+
     pub fn from_str(s: &str) -> Self {
         let mut spl = s.split(',');
         let x = spl.next().unwrap().parse().unwrap();
         let y = spl.next().unwrap().parse().unwrap();
         Self { x, y }
+    }
+
+    pub fn increment(&mut self, diff: Coord) {
+        self.x += diff.x;
+        self.y += diff.y;
+    }
+
+    pub fn max(&self) -> CoordType {
+        max(self.x, self.y)
     }
 }
 
