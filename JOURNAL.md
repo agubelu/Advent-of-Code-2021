@@ -14,6 +14,7 @@ Of course, expect spoilers if you keep reading!
 * **[Day 5](#day-5):** 2.3766 ms
 * **[Day 6](#day-6):** 0.0884 ms
 * **[Day 7](#day-7):** 0.1113 ms
+* **[Day 8](#day-8):** 0.2128 ms
 
 ---
 
@@ -493,7 +494,7 @@ trait PointCounter {
 }
 ```
 
-This defines a common interface that any point counter can implement with different backups. We can have one that uses a vec...
+This defines a common interface that any point counter can implement with different backends. We can have one that uses a vec...
 
 ```rust
 struct VecCounter {
@@ -552,7 +553,7 @@ impl PointCounter for MapCounter {
 }
 ```
 
-I also made some other changes, such as using a `Coord` as a conter for both parts. Now, we can define a function that solves the problem using any point counter backend:
+I also made some other changes, such as using a `Coord` as a counter for both parts. Now, we can define a function that solves the problem using any point counter backend:
 
 ```rust
 fn solve_with(coords: &[CoordPair], mut solver: impl PointCounter) -> (u64, u64) {
@@ -698,4 +699,152 @@ fn get_sol2_for_pos(crabs: &[i32], pos: i32) -> i32 {
 ```
 
 And avoiding loops gives us a runtime that is more in line with the rest of the days. Today's problem was easy to solve initially, but it's one of those days where you learn something interesting.
-![Day 6 results](imgs/d07.png)
+
+![Day 7 results](imgs/d07.png)
+
+# Day 8
+I think today's problem was the first big filter, and it was also a lot of fun. We are given some 7-segment displays that are malfunctioning, the inputs to the segments are messed up. We must find out which inputs belong to which segments, and then decode some numbers.
+
+The inputs are encoded as letters from `a` to `h`. We know that each letter corresponds to a segment, but we don't know to which one. To solve it, we are given the inputs for all 10 possible digits, where both the letters (inputs for the segments) and the digits themselves are in any possible order.
+
+I'll focus only on part 2, since part 1 is uninteresting and can be solved either without actually resolving the segments, or trivially after the segments are solved. Also, for simplicity, I'll focus only on a single row of the input. All rows can be decoded using this method.
+
+I denoted all 7 segments using the numbers 0-6, as follows:
+
+```
+ 00000000
+1        2
+1        2
+1        2
+ 33333333
+4        5
+4        5
+4        5
+ 66666666
+```
+
+Now, let's dive into the representation of the problem. I decided to represent all the inputs as 8-bit numbers, where each bit indicates that a certain segment is on. So, the letter `a` is `00000001`, `b` is `00000010`, and something like `abd` would be `00001011`. Each bit always corresponds to the same segment, but we don't kno yet to which one in an ordinary 7-bit display. Note that the most significant bit is always unused, as there are only 7 possible segments.
+
+So, I decided to represent each row using this struct:
+
+```rust
+struct SegmentDecoder {
+    digits: [u8; 10],
+    four: u8,
+    seven: u8,
+    reading: Vec<u8>,
+}
+```
+
+`digits` always has length 10, as it contains the examples for digits 0 to 9. `reading` is the part always the separator. It seems that it always has 4 elements, but I didn't wanna bother checking the whole input, so I store them in a vec for flexibility. `four` and `seven` are the 8-bit segment representations of said numbers. Even if we don't know which segments are which yet, they can be unambiguously found, as they are the only ones which use four and three segments, respectively (aka, they have 4 and 3 1's). As we'll see, they'll come in handy in a moment.
+
+Ok, so how do we resolve which bit corresponds to which segment? After analyzing the problem a bit, I found that there is a way to resolve 3 segments immediately: in all the digits 0 to 9, the segments 1, 4 and 5 are used 6, 4 and 9 times respectively. Segments 0 and 2 are used 8 times, and segments 3 and 6 are used 7 times.
+
+To leverage this, we can go through `i = 1 to 7` and count how many times the bit `i` is set throughout all of the 10 examples. If the count is 6, 4 or 9, we know that the bit `i` corresponds to the segment 1, 4 or 5 respectively. If the count is 7 or 8, we don't know about that bit yet. We have figured out segments 1, 4 and 5.
+
+To figure out the rest, I'll keep an aditional 8-bit numbers, whose bits are 1 if we have already figured out the segment corresponding to the bit in that position. Let's call it `resolved`. By this point, the bits that correspond to segments `1, 4, 5` will be set to 1, because we know which ones they are.
+
+After the previous process, the bits that correspond to segments 0, 2, 3 and 6 are unknown. But they can be resolved too. Let's consider the way the numbers 4 and 7 are represented in a 7-segment display: 4 uses the segments `1, 2, 3, 5`, and 7 uses `0, 2, 5`. If we take the segments used by the number `4`, and remove those that are also used by seven, we have `1, 3`. In our code, this means that if we do `four & ~seven`, we will have a number with only 2 bits set, those corresponding to segments 1 and 3. But we already know about segment 1! It's set to one in our `resolved` variable. If we remove the ones we know about too, it turns out that `four & ~seven & ~resolved` will only have one bit set, that corresponding to segment 3.
+
+We can keep figuring out the rest this way. As discussed, the number 4 uses segments `1, 2, 3, 5`, but we already know about segments `1, 3, 4, 5`, so a simple `four & ~resolved` gives us segment 2. Only segments 5 and 6 remain. Turns out, the number 7 only has one segment that we don't know about: `seven & ~resolved` gives us segment 5. Finally, segment 6 must be the one remaining.
+
+```rust
+pub fn resolve(&self) -> [u8; 7] {
+    let mut resolved = 0;
+    let mut corresp = [0; 7];
+
+    // We can resolve segments 1, 4 and 5 just from how many times they appear
+    for i in 0..8 {
+        let mask = 1 << i;
+        let sum = self.digits.iter().filter(|x| *x & mask != 0).count();
+        let val = match sum {
+            4 => Some(4),
+            6 => Some(1),
+            9 => Some(5),
+            _ => None
+        };
+
+        if let Some(x) = val {
+            corresp[x] = mask;
+            resolved |= mask;
+        }
+    }
+
+    // The rest can be obtained by process of elimination
+    corresp[3] = self.four & !self.seven & !resolved;
+    resolved |= corresp[3];
+    corresp[2] = self.four & !resolved;
+    resolved |= corresp[2];
+    corresp[0] = self.seven & !resolved;
+    resolved |= corresp[0];
+    corresp[6] = !resolved & 0x7F; // dont set the 8th bit to 1
+
+    corresp
+}
+```
+
+The process of segment resolution returns an array of 7 elements: position `i` contains an 8-bit number, with a set bit that corresponds to segment `i`.
+
+With this correspondence, we can go and figure out the numbers after the separator. It's a bit ugly, since we must construct the binary representation of all digits 0-9, but after that it's a matter or finding which one's which:
+
+```rust
+pub fn get_answers(&self, corresp: [u8; 7]) -> (u64, u64) {
+    let seven = self.seven;
+    let four = self.four ;
+    let one = seven ^ corresp[0];
+    let three = seven | corresp[3] | corresp[6];
+    let eight = three | corresp[1] | corresp[4];
+    let two = eight ^ corresp[1] ^ corresp[5];
+    let five = eight ^ corresp[2] ^ corresp[4];
+    let zero = eight ^ corresp[3];
+    let six = eight ^ corresp[2];
+    let nine = eight ^ corresp[4];
+
+    let (mut part1, mut part2) = (0, 0);
+
+    for val in self.reading.iter().copied() {
+        let number = match val {
+            x if x == zero => 0,
+            x if x == one => 1,
+            x if x == two => 2,
+            x if x == three => 3,
+            x if x == four => 4,
+            x if x == five => 5,
+            x if x == six => 6,
+            x if x == seven => 7,
+            x if x == eight => 8,
+            x if x == nine => 9,
+            _ => unreachable!(),
+        };
+
+        part2 = part2 * 10 + number;
+        if number == 1 || number == 4 || number == 7 || number == 8 {
+            part1 += 1;
+        }
+    
+    }
+
+    (part1, part2)
+}
+```
+
+In the end, we can simply associate one resolver with each line, get the answers for both parts and sum it all together:
+
+```rust
+pub fn solve() -> SolutionPair {
+    let (sol1, sol2) = read_to_string("input/day08.txt").unwrap()
+        .lines()
+        .map(|line| {
+            let decoder = SegmentDecoder::from_line(line);
+            let corresp = decoder.resolve();
+            decoder.get_answers(corresp)
+        })
+        .reduce(|(a1, a2), (b1, b2)| (a1 + b1, a2 + b2))
+        .unwrap();
+
+    (Solution::UInt(sol1), Solution::UInt(sol2))
+}
+```
+Given the task, it's not too slow:
+
+![Day 8 results](imgs/d08.png)
