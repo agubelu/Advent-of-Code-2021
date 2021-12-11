@@ -15,6 +15,9 @@ Of course, expect spoilers if you keep reading!
 * **[Day 6](#day-6):** 0.0884 ms
 * **[Day 7](#day-7):** 0.1113 ms
 * **[Day 8](#day-8):** 0.2128 ms
+* **[Day 9](#day-9):** 1.1991 ms
+* **[Day 10](#day-10):** 0.1462 ms
+* **[Day 11](#day-11):** 0.2798 ms
 
 ---
 
@@ -848,3 +851,262 @@ pub fn solve() -> SolutionPair {
 Given the task, it's not too slow:
 
 ![Day 8 results](imgs/d08.png)
+
+# Day 9
+
+Our task today is to analyze a depth map, and find points whose value is lower than those around it. Then, we are told that each of those points has an associated basin, areas where the height keeps decreasing towards them, and we must compute the sizes of said basins.
+
+Part 1 is relatively straightforward: for every position, we visit those that are nearby, and we check that all of them are higher. Part 2 is more interesting, and it's probably the first appearance yet of a classical algorithm. Given the definition of a basin, how can we get its size?
+
+We are told that each low is associated with exactly one basin, and that all points in the map, except for 9's, are also associated with only one basin. Thus, we can go through each point and compute the size of the basin around it. If it is not a low, the process stops and the size of the basin is 0. Otherwise, we get the size for part 2, and add the value of the point for part 1.
+
+The size of a basin is best computed recursively: given one central point, which will initially be the lowest of the basin, we mark it as "visited", and then we obtain the points in its vicinity that are higher than it and have not been visited yet. The size of the basin is thus 1 (the current center) plus the size of the basin in all 4 directions. This process keeps going until we reach a 9, or all points around the center have already been visited, or the height around all points decreases again.
+
+I stored all the information in this struct:
+
+```rust
+struct HeightMap {
+    pub heights: Vec<u8>,
+    pub visited: Vec<bool>,
+    pub rows: usize,
+    pub columns: usize
+}
+```
+
+Given that the size of the map is variable between the examples and the actual input, I decided to use a vec to store both the heights and the visited marks, and also store the number of rows and columns to easily convert from 1D to 2D.
+
+So, the size of the basin around a certain position is computed as...
+
+```rust
+fn get_basin_size(height_data: &mut HeightMap, pos: usize) -> u64 {
+    let val = height_data.heights[pos];
+    if val == 9 || height_data.visited[pos] {
+        return 0;
+    }
+
+    let nearby_unvisited = height_data.nearby(pos).into_iter().filter(|&i| !height_data.visited[i]).collect_vec();
+    let is_min = nearby_unvisited.iter().all(|&pos| height_data.heights[pos] >= val);
+
+    if is_min {
+        height_data.visited[pos] = true;
+        1 + nearby_unvisited.iter().map(|&i| get_basin_size(height_data, i)).sum::<u64>()
+    } else {
+        0
+    }
+}
+```
+
+`height_data.nearby(pos)` returns the adjacent positions of a given one. We use it to get those near the current position that have not yet been visited. If the current one is the highest among the unvisited neighbors, we are still in the basin, and we add the size of it in all directions.
+
+Given that, we can use this function for both solutions:
+
+```rust
+pub fn solve() -> SolutionPair {
+    let s = read_to_string("input/day09.txt").unwrap();
+    let mut height_data = HeightMap::from_str(&s);
+
+    let mut sol1 = 0;
+    let mut basins = vec![];
+
+    for pos in 0..height_data.heights.len() {
+        let basin_size = get_basin_size(&mut height_data, pos);
+        if basin_size > 0 {
+            basins.push(basin_size);
+            sol1 += height_data.heights[pos] as u64 + 1;
+        }
+    }
+
+    basins.sort_unstable_by(|a, b| b.cmp(a));
+    let sol2 = basins[..3].iter().product();
+
+    (Solution::UInt(sol1), Solution::UInt(sol2))
+}
+```
+
+This is probably not the most efficient thing in the world, and can surely be optimized (especially the function used to get the adjacent positions, which is quite ugly). I'll probably do so in the next few days, to try to get it under 1ms:
+
+![Day 9 results](imgs/d09.png)
+
+# Day 10
+
+It looks like today someone fucked some code up, and we have syntax errors everywhere. More specifically, we have four kinds of *chunks*: `{}`, `[]`, `()` and `<>`. They can be empty, like the ones I just showed, or can recursively contain one or more other chunks, for example, `[{[<(){}>]}(<><>)]` is a valid chunk. Our input is a list of such chunks, however, they are all **corrupt** or **incomplete**.
+
+Corrupt chunks have a closing character that is not expected, for example, `[()()>`, where `>` should be `]` instead. Incomplete chunks don't have that problem, but they are missing one or more closing characters at the end that would make them valid. Part 1 is about finding corrupt chunks and determining which character is the offending one, while part 2 asks us to complete incomplete chunks.
+
+My first attempt was to build a recursive chunk parser for part 1, which would give an error if it found an unexpected closing character. While it worked, I then realized that it was more inefficient than using a LIFO (last in first out) stack, which I will anyways need for part 2.
+
+The idea is the following: you go through all the characters in the line, and:
+- If it's an opening character, you push the corresponding closing char onto the stack
+- If it's a closing character, you pop the one you have at the top of the stack. If it's the same, everything's good. If it's different, you just encountered an unexpected closing character, and the chunk is corrupt.
+
+If you get to the end, then the line is incomplete, and the closing characters in the stack are exactly those you need to complete it.
+
+Then, it makes sense to map all the lines to either *corrupted* or *incomplete*, with their associated scores as defined by the problem:
+
+```rust
+enum LineResult {
+    Corrupted { score: u64 },
+    Incomplete { score: u64 },
+}
+```
+
+Our chunk analyzer will perform exactly the procedure described before, and return an instance of the previous enum depending on the result:
+
+```rust
+fn analyze_line(line: &str) -> LineResult {
+    let mut closers = Vec::with_capacity(100);
+
+    for ch in line.chars() {
+        match ch {
+            '{' => closers.push('}'),
+            '[' => closers.push(']'),
+            '(' => closers.push(')'),
+            '<' => closers.push('>'),
+            '}' | ']' | ')' | '>' => {
+                if closers.pop().unwrap() != ch {
+                    let score = match ch {
+                        ')' => 3,
+                        ']' => 57,
+                        '}' => 1197,
+                        '>' => 25137,
+                         _  => unreachable!()
+                    };
+                    return LineResult::Corrupted{ score };
+                }
+            },
+            _ => unreachable!()
+        }
+    }
+
+    get_completion_score(&closers)
+}
+```
+
+If we get to the end, then we must complete the line with the closing characters in the stack, and compute the associated score:
+
+```rust
+fn get_completion_score(closers: &[char]) -> LineResult {
+    let mut score = 0;
+    for ch in closers.iter().rev() {
+        score = score * 5 + match ch {
+            ')' => 1,
+            ']' => 2,
+            '}' => 3,
+            '>' => 4,
+             _  => unreachable!()
+        };
+    }
+    LineResult::Incomplete{score}
+}
+```
+
+Finally, we just have to analyze each line, and process the scores as stated in the problem:
+
+```rust
+pub fn solve() -> SolutionPair {
+    let input = read_to_string("input/day10.txt").unwrap();
+    let mut sol1 = 0;
+    let mut sol2_scores = Vec::with_capacity(100);
+
+    input.lines().for_each(|line| match analyze_line(line) {
+        LineResult::Corrupted{score} => sol1 += score,
+        LineResult::Incomplete{score} => sol2_scores.push(score),
+    });
+
+    sol2_scores.sort_unstable();
+    let sol2 = sol2_scores[sol2_scores.len() / 2];
+
+    (Solution::UInt(sol1), Solution::UInt(sol2))
+}
+```
+
+Which results in a very speedy 0.14ms:
+
+![Day 10 results](imgs/d10.png)
+
+# Day 11
+
+Today's problem reminded me a lot of [this Veritasium video](https://www.youtube.com/watch?v=t-_VPRCtiUg), it deals with synchronization in a bioluminiscence process. More specifically, we have a grid of 10x10 octopuses which can flash with light. Each octopus has an internal clock that counts from 0 to 9, and it's incremented on each step. Upon reaching 10, it emits a pulse of light and resets to 0. Also, when an octopus flashes, it increments the clocks of all other octopuses around it. This all happens in the same step, so a single flash caused by the +1 increment can lead to many more.
+
+My implementation is relatively straightforward: I have a 10x10, 2D array which contains the octopuses represented as their clocks. On each step, the following process is executed:
+
+- Increment all counters by 1. If a counter reaches 10, which means the octopus in that position is going to flash on this step, reset it to 0 and add its position to a list of octopuses that flash.
+
+- For each octopus that flashes, call a recursive function that counts the total amount of flashes that result from that one. This function increments the counter of all nearby octopuses and, if any of them reaches 10, it resets its to 0 and calls itself on the new position.
+
+This is how the implementation looks like:
+
+```rust
+// Performs one step and returns the number of flashes
+fn do_step(grid: &mut Grid) -> usize {
+    let mut n_flashes = 0;
+    let mut flash_pos = Vec::with_capacity(100);
+
+    grid.iter_mut().enumerate().for_each(|(row, arr)| {
+        arr.iter_mut().enumerate().for_each(|(col, val)| {
+            *val = (*val + 1) % 10;
+            if *val == 0 {
+                flash_pos.push((row, col));
+            }
+        })
+    });
+
+    for (row, col) in flash_pos {
+        n_flashes += flash(grid, row, col);
+    }
+
+    n_flashes
+}
+
+// Flashes one position, increments the nearby ones and returns the number
+// of total flashes as a consequence
+fn flash(grid: &mut Grid, row: usize, col: usize) -> usize {
+    let mut total_flashes = 1;
+
+    for (dx, dy) in WINDOW_STEPS {
+        let new_row = row as i8 + dx;
+        let new_col = col as i8 + dy;
+        if new_row < 0 || new_row == GRID_SIZE as i8 || new_col < 0 || new_col == GRID_SIZE as i8 {
+            continue;
+        }
+
+        match &mut grid[new_row as usize][new_col as usize] {
+            0 => {},
+            v if *v == 9 => {
+                *v = 0;
+                total_flashes += flash(grid, new_row as usize, new_col as usize);
+            },
+            v => *v += 1,
+        };
+    }
+
+    total_flashes
+}
+```
+
+I tried to use recursiveness straight away on the points that flashed upon increment, to avoid having to store them in a vector and then process them, but it didn't work because then I would have to keep track of which ones are 0 from the previous step, which can be incremented by one, and which ones are 0 because they already flashed this turn, which should not be incremented. So, I decided to leave it like this.
+
+To solve both parts, we can sum the total amount of flashes in the first 100 steps, then leave it running until all octopuses flash at once:
+
+```rust
+pub fn solve() -> SolutionPair {
+    let input = read_to_string("input/day11.txt").unwrap();
+    let mut grid = read_input(&input);
+    let mut flashes = 0;
+
+    for _ in 0..100 {
+        flashes += do_step(&mut grid);
+    }
+
+    let mut steps = 101;
+    while do_step(&mut grid) != GRID_SIZE * GRID_SIZE {
+        steps += 1;
+    }
+
+    (Solution::UInt(flashes as u64), Solution::UInt(steps))
+}
+```
+
+I don't know if there is a more analytical way to solve it. I was expecting part 2 to be one of those days where they ask you to run part 1 for ten more million steps, but it was relatively quick:
+
+![Day 11 results](imgs/d11.png)

@@ -49,21 +49,6 @@ fn get_basin_size(height_data: &mut HeightMap, pos: usize) -> u64 {
     }
 }
 
-struct PosIter {
-    nearby: [Option<usize>; 4],
-    i: usize
-}
-
-impl Iterator for PosIter {
-    type Item = usize;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let elem = self.nearby[self.i];
-        self.i += 1;
-        elem
-    }
-}
-
 impl HeightMap {
     pub fn from_str(s: &str) -> Self {
         let lines = s.lines().collect_vec();
@@ -90,5 +75,3 @@ impl HeightMap {
         }
     }
 }
-
-
