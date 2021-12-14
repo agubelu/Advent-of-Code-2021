@@ -18,6 +18,9 @@ Of course, expect spoilers if you keep reading!
 * **[Day 9](#day-9):** 1.1991 ms
 * **[Day 10](#day-10):** 0.1462 ms
 * **[Day 11](#day-11):** 0.2798 ms
+* **[Day 12](#day-12):** 3.3025 ms
+* **[Day 13](#day-13):** 0.4933 ms
+* **[Day 14](#day-14):** 0.1283 ms
 
 ---
 
@@ -1110,3 +1113,319 @@ pub fn solve() -> SolutionPair {
 I don't know if there is a more analytical way to solve it. I was expecting part 2 to be one of those days where they ask you to run part 1 for ten more million steps, but it was relatively quick:
 
 ![Day 11 results](imgs/d11.png)
+
+# Day 12
+
+Some cool algorithms today! We are given the layout of a set of communicating caves, and we must find the number of total possible paths from the start cave to the end cave. However, there's some more conditions: there are big and small caves. Big caves can be visited as often as desired, but each small cave can only be visited once. Furthermore, part 2 relaxes the last condition a bit, and it allows us to visit one particular small cave at most twice, and all other once at most.
+
+With all these conditions, we must find a way to examine all possible paths between the two caves.
+
+I think a recursive approach is the most natural way to proceed here: we will have a recursive function that knows where we are right now, where we want to end up, and all the caves that we have already visited. We will also need some sort of map, that given a cave, returns the list of all other caves connected to it.
+
+Then, we will start at the current cave, and evaluate our choices. The caves we can go to are all big caves connected to the actual one, and the connected small ones that we have not visited yet. The number of paths from the current position to the goal will be the sum of all possible paths for each direction that we can take (recursive calls to the function, updating the current cave and the visited ones). If the next cave we can go to is the goal cave, instead of calling recursively, we just add 1 to the total paths.
+
+My first implementation, just to get a feel of the problem, did exactly that. The core of the solution is a `pathfinder` function that receives all the information discussed above. The caves are identified with strings using their names, and the connectivity info is a map from String to a list of Strings. I also managed to generalize it for part 2: it receives a boolean flag to determine the part to solve, and another boolean flag to remember if we have visited any small cave more than once.
+
+```rust
+fn pathfinder<'a, 'b>(
+    conn: &'a ConnectivityMap, 
+    from: &'a str, 
+    to: &'a str, 
+    visited_small_caves: &'b mut Vec<&'a str>,
+    part2: bool,
+    mut small_visited_twice: bool,
+) -> u64 {
+    let mut paths = 0;
+    let mut current_small = false;
+
+    if from.chars().next().unwrap().is_ascii_lowercase() {
+        current_small = true;
+        visited_small_caves.push(from);
+
+        if part2 && !small_visited_twice && visited_small_caves.iter().filter(|&&cave| cave == from).count() == 2 {
+            small_visited_twice = true;
+        }
+    }
+
+    let caves_to_visit = conn[from].iter().filter(|cave| !visited_small_caves.contains(cave) || part2 && !small_visited_twice).collect_vec();
+
+    for next_cave in caves_to_visit {
+        if *next_cave == to {
+            paths += 1;
+        } else {
+            paths += pathfinder(conn, next_cave, to, visited_small_caves, part2, small_visited_twice);
+        }
+    }
+
+    if current_small {
+        visited_small_caves.pop();
+    }
+
+    paths
+}
+```
+
+We use the casing of the name of the current cave to determine if it's a small one or not. If it is, and we have already visited it, we set the corresponding boolean flag. The generation of possible caves to go to can be generalized for both parts: either it is not present in the list of small caves that we have already visited, or we are solving part 2 and we have not visited any single small cave yet.
+
+Adding an extra function to abstract the previous one a bit, and excluding parsing the input, this can be used to solve the problem:
+
+```rust
+type ConnectivityMap<'a> = FxHashMap<&'a str, Vec<&'a str>>;
+
+pub fn solve() -> SolutionPair {
+    let input_data = read_to_string("input/day12.txt").unwrap();
+    let connects = load_connectivity(&input_data);
+    let sol1 = n_paths_between(&connects, "start", "end", false);
+    let sol2 = n_paths_between(&connects, "start", "end", true);
+    (Solution::UInt(sol1), Solution::UInt(sol2))
+}
+
+fn n_paths_between(conn: &ConnectivityMap, from: &str, to: &str, part2: bool) -> u64 {
+    pathfinder(conn, from, to, &mut vec![], part2, false)
+}
+```
+
+This solution takes around **50ms**. Okay-ish, but can be improved.
+
+Coding a chess engine as a side project has taught me that representing stuff using bits can speed things up quite a lot. I thought for a bit, and I found a way to leverage bit operations to make this solution much faster.
+
+Let's do something similar to what we did with the 7-segment displays. Instead of representing caves as strings, each individual cave will be an `u64` number, with only one bit set. For example, `start` will be `00...0001`, `A` will be `00.0010`, and so on. This representation will allow us to use ands and ors liberally.
+
+If we represent caves this way, we lose the information about which ones are small and which ones are big. To preserve it, we will have an extra number, `small_caves`, which will have set bits corresponding to those of the small caves. It can be computed as simply the bitwise `or` of all small caves.
+
+This, in addition to simplifying some stuff with lifetimes, also makes some of the most costly operations in the previous function virtually as fast as it gets. Now, instead of remembering the small caves we have visited with a list, we will simply `or` them into an `u64` that will contain the bits of the visited caves. If we want to know if we have visited a cave, we simply have to check that `cave & visited != 0`. Since `cave` only has one bit set, the result can only be different to zero if that bit has been marked as visited in the visited caves `u64`. Similarly, we can know if a cave is a small cave with `cave & small_caves != 0`.
+
+One more neat trick: the connectivity map. We can replace it with a list, whose size is the number of caves. Each position contains an `u64`, with set bits corresponding to those of the caves you can visit from that one. So... we use the value of the cave itself to index the list? Not exactly. Since they only have 1 set bit, they are essentially powers of 2. If we have 10 caves, the last one would have a value of `2^10`, and it clearly isn't a good idea to have a list of that size only to store 10 values. The way to do it is to count the zeros at the end of the binary representation of the cave. That way, `00....01` is `0`, `00.....010` is `1`, and so on.
+
+The new and shiny `pathfinder` function looks like this:
+
+```rust
+fn pathfinder(conn: &[u64], small_caves: u64, from: u64, to: u64, visited: u64, part2: bool, mut small_visited_twice: bool) -> u64 {
+    let mut paths = 0;
+
+    if part2 && !small_visited_twice && (from & small_caves & visited) != 0 {
+        small_visited_twice = true;
+    }
+
+    paths += get_cave_ids(conn[from.trailing_zeros() as usize])
+        .filter(|cave| (cave & small_caves & visited) == 0 || part2 && !small_visited_twice)
+        .map(|next_cave| match next_cave {
+            x if x == to => 1,
+            _ => pathfinder(conn, small_caves, next_cave, to, visited | from, part2, small_visited_twice)
+        })
+        .sum::<u64>();
+
+    paths
+}
+```
+
+One question may remain: ok, we can index a list to get the accesible caves from each one, but, for example, `0000...00111` means that we can access cave 0, 1 and 2. However, we iterate over them using their individual values: `00...0001`, `00...0010` and `00...0100`. How can we get the individual bit components of a number as a separate number?
+
+This is something I almost copy-pasted from my chess engine. Turns out there is a way to iterate over such numbers, given one base number with some bits set. That's exactly what `get_cave_ids()` does:
+
+```rust
+struct CaveIter {
+    val: u64
+}
+
+impl Iterator for CaveIter {
+    type Item = u64;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self.val {
+            0 => None,
+            x => {
+                self.val = x & (x - 1);
+                Some(1 << x.trailing_zeros())
+            }
+        }
+    }
+}
+
+fn get_cave_ids(val: u64) -> CaveIter {
+    CaveIter { val }
+}
+```
+
+It is just a wrapper that returns an iterator. That iterator scans the first set bit of a number, returns another number with just that bit set, and sets it to 0 in the stored number. When the internal number is 0, no more values are yielded. `self.val = x & (x - 1)` may be confusing. The short explanation is: if you `and` a number with itself minus 1, the result will be the original number with the rightmost 1 bit flipped to 0.
+
+I skipped all the details regarding the input processing required to do this. It's not hard, just a bit lengthy. It can be found in the [source code](src/days/day12.rs#L41).
+
+And now, we can solve day 12 in a blazing fast...
+
+![Day 12 results](imgs/d12.png)
+
+# Day 13
+
+After yesterday's fun with recursion, we have something simpler today. We have a bunch of points as (x, y) coordinates, and a bunch of folds over the X or Y axis. These points are in a transparent sheet, and upon folding it as required, their coordinates change (they may even overlap with other points). Part 1 only asks us to do the first fold and count how many unique points remain as a result. For part 2, we must do all folds and visually represent the resulting points.
+
+I made this day pretty struct-heavy, which allows for some nice, functional-style code.
+
+The points and folds are stored using these structs:
+
+```rust
+enum Fold {
+    YFold { y: usize },
+    XFold { x: usize },
+}
+
+struct Point {
+    pub x: usize,
+    pub y: usize
+}
+```
+
+`Fold` is an enum because it is always handy being able to `match` over the two possible types.
+
+Let's give `Point` some functionality. Given a `Fold`, we can implement a method to apply the fold to the point, and return a new one with the appropriate coordinates:
+
+```rust
+impl Point {
+    pub fn apply_fold(&self, fold: Fold) -> Self {
+        let (x, y) = match fold {
+            XFold{x} => (if self.x > x {2 * x - self.x} else {self.x}, self.y),
+            YFold{y} => (self.x, if self.y > y {2 * y - self.y} else {self.y}),
+        };
+
+        Self {x, y}
+    }
+}
+```
+
+The formula for how to update the coordinates may seem a bit weird at first, but it's easy to deduce. If we are folding over the Y axis, i.e. over a horizontal line. the X coordinate will remain unchanged. Moreover, the Y coordinate will only help if it is below the point of the fold. It is relatively straightforward to come up with the way to obtain the new Y: `fold.y - (point.y - fold.y)`, which can be simplified as `2*fold.y - point.y`. The same considerations apply for a fold over the X axis.
+
+For part 2, I also added a method to apply a series of folds, in a way that is a bit more efficient that calling the previous method multiple times:
+
+```rust
+impl Point {
+    pub fn apply_fold_list(&self, folds: &[Fold]) -> Self {
+        let mut x = self.x;
+        let mut y = self.y;
+
+        folds.iter().for_each(|fold| {
+            match fold {
+                XFold{x: x_fold} if *x_fold < x => x = 2 * *x_fold - x,
+                YFold{y: y_fold} if *y_fold < y => y = 2 * *y_fold - y,
+                _ => {},
+            }
+        });
+
+        Self {x, y}
+    }
+}
+```
+
+Again, I will skip the code for reading the input, which is relatively boring.
+
+When we have all the points and folds, we can solve part 1 with...
+
+```rust
+pub fn solve() -> SolutionPair {
+    let input = read_to_string("input/day13.txt").unwrap();
+    let (points, folds) = read_data(&input);
+
+    let new_points = points.into_iter().map(|p| p.apply_fold(folds[0])).unique().collect_vec();
+    let sol1 = new_points.len() as u64;
+    [...]
+}
+```
+
+For part 2, we can keep applying the rest of the folds to get the final points:
+
+```rust
+pub fn solve() -> SolutionPair {
+    [...]
+    let (cols, rows) = get_rows_cols(&folds);
+    let mut chars = vec![' '; rows as usize * cols as usize];
+    new_points.into_iter()
+        .map(|p| p.apply_fold_list(&folds[1..]))
+        .for_each(|point| {
+            let pos = point.y * cols + point.x;
+            chars[pos] = '█';
+        });
+
+    let sol2 = "\n".to_owned() + &chars.chunks(cols)
+        .map(String::from_iter)
+        .join("\n");
+
+    (Solution::UInt(sol1), Solution::Str(sol2))
+}
+```
+
+To get the number of rows and columns of the final string representation, we just have to find the minimum X and Y values of the folds, and that is precisely what `get_rows_cols()` does. When we know them, we can transform the points into the final positions, and put a big chonky black square character in that position. 
+
+For the final representation, we simply split the character vectors into chunks having `cols` characters each, and join them with newlines. The final output is pretty cool, I love days where they make you build some sort of visual representation of some letters:
+
+![Day 13 results](imgs/d13.png)
+
+# Day 14
+
+After some delay updating this, I'm finally up to date! Today's problem involves synthetizing chemicals. The input is a string with a bunch of characters, and some rules about how the characters combine to increase the length of the chemical product. I'll assume you're familiar with the details of the problem.
+
+This is another exponential problem: the chemical almost doubles its length on each step. We are asked to count the most and least common element after 10 steps (part 1) and 40 steps (part 2).
+
+If you try to bruteforce your way into this one, you'll end up with a chemical that's gonna be a few billion characters long. Is there another way to do it?
+
+This one seemed to me pretty similar to the lanternfish problem. They show you a representation that escales exponentionally and it's up to you to find a more optimal way.
+
+My solution was to count how many of each pair of characters we have in each step. Thanks to the composition rules, we know which pairs are derived from which ones. For example, `AB -> C` means that, for each `AB` pair in one step, the following step will have as many `
+AC` and `CB` pairs. If you think about it, the order of the pairs is not important at all, so it's not needed to represent them with a string or a list.
+
+As usual, instead of their names, I assigned a number from 0 to N to each character pair, so I can use their values to address a list. The chemical conversions are stored in a `Vec<(usize, usize)>`, where each position contains the indices of the two pairs it transforms into.
+
+Given that, the main function to solve the problem is easy to understand:
+
+```rust
+fn do_n_steps(pairs: &[usize], recipes: &[(usize, usize)], chars: &[(usize, usize)], steps: u32) -> u64 {
+    let n_recipes = recipes.len();
+    let mut count = vec![0; n_recipes];
+    for &p in pairs {
+        count[p] += 1;
+    }
+
+    for _ in 0..steps {
+        let mut new_count = vec![0; n_recipes];
+
+        for (i, val) in count.into_iter().enumerate() {
+            let (pair1, pair2) = recipes[i];
+            new_count[pair1] += val;
+            new_count[pair2] += val;
+        }
+
+        count = new_count;
+    }
+
+    let mut char_count = vec![0; (n_recipes as f32).sqrt() as usize];
+    for (i, val) in count.into_iter().enumerate() {
+        let (char1, char2) = chars[i];
+        char_count[char1] += val;
+        char_count[char2] += val;
+    }
+
+    (char_count.iter().max().unwrap() - char_count.iter().min().unwrap()) / 2u64
+}
+```
+
+We start by counting the pairs of each type. The `count` vec has as many elements as types of pairs, and each value represents how many pairs of that type we have in the current step.
+
+Then, for each step, we transform each pair into the new two. The number of new pairs that are generated is the same as the quantity of the orignial pair.
+
+Finally, since we are dealing with pairs of characters and not characters themselves, which are what counts for the solutions, I built an additional vec in which each position for a pair transforms into the values representing two different characters.
+
+To solve, we just have to use different step amounts:
+
+```rust
+pub fn solve() -> SolutionPair {
+    let input = read_to_string("input/day14.txt").unwrap();
+    let (pairs, recipes, char_map) = read_input(&input);
+
+    let sol1 = do_n_steps(&pairs, &recipes, &char_map, 10);
+    let sol2 = do_n_steps(&pairs, &recipes, &char_map, 40);
+
+    (Solution::UInt(sol1), Solution::UInt(sol2))
+}
+```
+
+And we can get a result in the order of a few billions as quick as...
+
+![Day 14 results](imgs/d14.png)
