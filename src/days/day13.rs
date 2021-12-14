@@ -30,7 +30,7 @@ pub fn solve() -> SolutionPair {
         .map(|p| p.apply_fold_list(&folds[1..]))
         .for_each(|point| {
             let pos = point.y * cols + point.x;
-            chars[pos] = '▮'; 
+            chars[pos] = '█';
         });
 
     let sol2 = "\n".to_owned() + &chars.chunks(cols)
