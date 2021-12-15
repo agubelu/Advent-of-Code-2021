@@ -7,6 +7,7 @@ I'll keep updating this file with some commentary and discussion every day.
 Of course, expect spoilers if you keep reading!
 
 ---
+
 * **[Day 1](#day-1):** 0.1367 ms
 * **[Day 2](#day-2):** 0.1269 ms
 * **[Day 3](#day-3):** 0.1215 ms
@@ -21,6 +22,7 @@ Of course, expect spoilers if you keep reading!
 * **[Day 12](#day-12):** 3.3025 ms
 * **[Day 13](#day-13):** 0.4933 ms
 * **[Day 14](#day-14):** 0.1283 ms
+* **[Day 15](#day-15):** 30.8155 ms
 
 ---
 
@@ -1429,3 +1431,132 @@ pub fn solve() -> SolutionPair {
 And we can get a result in the order of a few billions as quick as...
 
 ![Day 14 results](imgs/d14.png)
+
+# Day 15
+
+Some more fun with classical algorithms today. We have a 2D map of positions that we can traverse horizontally or vertically, and each of these positions has an associated risk, from `1` to `9`. The goal is to go from the top-left corner to the bottom-right corner, finding the path that has the minimum total risk.
+
+For part 2, we find out that the 2D map repeats itself 5 times in each direction, and that the associated risks for each position change a bit every time. More specifically, they increment by 1 with respect to the equivalent position in the grid on top or to the left. A risk of `9` wraps around to `1`, and so on.
+
+With this problem statement, it is pretty obvious that it can be solved using one of the classical optimum path finding algorithms, such as A* or Dijkstra (which is actually a particular case of A*). I decided to implement A*, which uses some heuristic function to guide the path finding process. For this purpose, we can use the Manhattan distance to the goal position as our heuristic, since it is easy to see that it is an [admissible heuristic](https://en.wikipedia.org/wiki/Admissible_heuristic) in this case, which guarantees that we will find the optimum path.
+
+I used this struct to store the information about the positions in the cave:
+
+```rust
+struct CaveInfo {
+    data: Vec<u32>,
+    rows: usize,
+    cols: usize,
+    rows_p2: usize,
+    cols_p2: usize,
+}
+``` 
+
+As usual, when storing 2D elements of variable length, I prefer to use a 1D `Vec` and just transform `x` and `y` coordinates into indices for it. It also stores the number of rows and columns for part 1 and part 2.
+
+This struct provides a few convenience methods:
+
+```rust
+impl CaveInfo {
+    pub fn coord_is_ok(&self, (x, y): Coord, part: Part) -> bool {
+        let (max_x, max_y) = match part {
+            Part1 => (self.cols, self.rows),
+            Part2 => (self.cols_p2, self.rows_p2),
+        };
+        x >= 0 && x < max_x as i32 && y >= 0 && y < max_y as i32
+    }
+
+    pub fn get_targets(&self) -> (Coord, Coord) {
+        ((self.cols as CoordItem - 1, self.rows as CoordItem - 1),
+         (self.cols_p2 as CoordItem - 1, self.rows_p2 as CoordItem - 1))
+    }
+
+    pub fn get_value(&self, (x, y): Coord) -> u32 {
+        let (actual_x, ovfx) = (x as usize % self.cols, x as usize / self.cols);
+        let (actual_y, ovfy) = (y as usize % self.rows, y as usize / self.rows);
+        let val = self.data[actual_x as usize + actual_y as usize * self.cols] + ovfx as u32 + ovfy as u32;
+        val % 10 + val / 10
+    }
+}
+```
+
+`coord_is_ok()` is used to verify that a given coordinate is within the 2D matrix, to avoid accessing invalid indices. `get_targets()` returns the bottom-right corner for both parts. Finally, `get_value()` returns the risk value for a given position `(x, y)`.
+
+This last method deserves some more discussion. Rather than actually storing `500^2` values for Part 2, I decided to calculate them dynamically from the original matrix. For any given `x` coordinate, which may be outside the limits of the original matrix used for Part 1, we can obtain the `x` coordinate in the original matrix by computing modulo `cols`, e.g., `x = 100`, which would be the first `x` coordinate of the first repetition, becomes `0`. We can also get which specific repetition the coordinate is addressing by dividing it by the number of columns. The same considerations apply to the `y` coordinate and the number of rows.
+
+Then, we access the value using the *modulo* coordinates. The number of increments that we must apply is actually equal to the sum of the indices of the addressed tile for both coordinates. Since 10 wraps back, I originally returned `val % 10`. However, then I realized it wraps back to `1`, not `0`. So, if the value is above 10, we must add one. That's what `+ val / 10` does.
+
+This method can be used for both parts. If we only access the coordinates for the original matrix, then it's always true that `actual_x == x`, `actual_y == y` and `ovfx == ovfy == 0`.
+
+The A* algorithm itself is implemented as follows, with an auxiliary struct to store the nodes to visit:
+
+```rust
+struct AStarState {
+    pub cost: u32,
+    pub node: Coord,
+}
+
+fn a_star(from: Coord, to: Coord, cave_info: &CaveInfo, part: Part) -> u32 {
+    let mut to_visit = BinaryHeap::new();
+    let mut visited_costs = FxHashMap::default();
+
+    to_visit.push(AStarState { cost: 0, node: from });
+
+    while let Some(AStarState { cost, node }) = to_visit.pop() {
+        if node == to {
+            return cost;
+        }
+
+        for mv in MOVE_DIRS {
+            let new_node = (node.0 + mv.0, node.1 + mv.1);
+            if !cave_info.coord_is_ok(new_node, part) {
+                continue;
+            }
+
+            let new_cost = cost + cave_info.get_value(new_node);
+
+            let prev_cost = match visited_costs.get(&new_node) {
+                Some(val) => *val,
+                None => u32::MAX,
+            };
+
+            if new_cost < prev_cost {
+                visited_costs.insert(new_node, new_cost);
+                to_visit.push(AStarState {
+                    cost: new_cost,
+                    node: new_node
+                });
+            }
+        }
+    }
+
+    u32::MAX
+}
+```
+
+It's a slightly simplified version, since we don't need to return the paths themselves, only the total cost. I won't get into the details of how it works, there's plenty of good info online.
+
+However... something's missing. After playing around with my solution for a while, I found out that it's actually faster to ditch the heuristic completely, so it's nowhere to be found. With this change, `a_star()` actually performs Dijkstra's algorithm :sweat_smile:
+
+We can proceed to solve both parts now:
+
+```rust
+enum Part { Part1, Part2 }
+
+pub fn solve() -> SolutionPair {
+    let input = read_to_string("input/day15.txt").unwrap();
+    let cave_data = CaveInfo::from_string(&input);
+
+    let start = (0, 0);
+    let (target_p1, target_p2) = cave_data.get_targets();
+
+    let sol1 = a_star(start, target_p1, &cave_data, Part1) as u64;
+    let sol2 = a_star(start, target_p2, &cave_data, Part2) as u64;
+
+    (Solution::UInt(sol1), Solution::UInt(sol2))
+}
+```
+
+Understandably, this takes a while, but the runtime is pretty acceptable:
+
+![Day 15 results](imgs/d15.png)
