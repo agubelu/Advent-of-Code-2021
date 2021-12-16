@@ -23,6 +23,7 @@ Of course, expect spoilers if you keep reading!
 * **[Day 13](#day-13):** 0.4933 ms
 * **[Day 14](#day-14):** 0.1283 ms
 * **[Day 15](#day-15):** 30.8155 ms
+* **[Day 16](#day-16):** 0.1156 ms
 
 ---
 
@@ -1560,3 +1561,131 @@ pub fn solve() -> SolutionPair {
 Understandably, this takes a while, but the runtime is pretty acceptable:
 
 ![Day 15 results](imgs/d15.png)
+
+It may be a few milliseconds faster to actually build the bigger matrix for part 2, I don't know. Anyways, I don't really wanna do that unless I eventually need to scrape a few ms.
+
+# Day 16
+
+Today we go back to parsing. More specifically, we are given a hex string that we must convert into a binary representation. Then, we must parse different types of packets represented in binary. They can contain either a literal value, or a number of other packets. Also, there's only one packet at the highest level.
+
+That's a tree structure of packets, where each packet contains more packets, or a literal. We can intuitively represent it using a `Packet` enum:
+
+```rust
+enum Packet {
+    Literal { version: u64, value: u64 },
+    Operation { version: u64, type_id: u64, payload: Vec<Packet> }
+}
+```
+
+In theory, literal packets also have a `type_id`, however it always has the same value for that type of packet, so it doesn't make much sense to store it.
+
+Now, let's get to the actual problem. I decided to try the [bitvec](https://docs.rs/bitvec/latest/bitvec/) crate, which seemed pretty adequate for today since it provides slices for vectors of bits. We can store the whole packet structure in a bit vector, decoding the hex string into a `Vec<u8>` and then feeding it to the `BitVec`:
+
+```rust
+let bits = BitVec::<Msb0, _>::from_slice(&hex::decode(input).unwrap()).unwrap();
+```
+
+The `Msb0` parameter indicates that we want to store the most significant bit in the first position of the array, as it is the way that the input is supposed to be read.
+
+Let's see how to read a packet:
+
+```rust
+fn parse_packet(bits: &Bits) -> (Packet, usize) {
+    let version = bits[..3].load_be();
+    let type_id = bits[3..6].load_be();
+
+    match type_id {
+        4 => {
+            let (value, payload_len) = parse_literal(&bits[6..]);
+            (Packet::Literal { version, value }, 6 + payload_len)
+        },
+        _ => {
+            let (payload, payload_len) = parse_operation(&bits[6..]);
+            (Packet::Operation { version, type_id, payload }, 6 + payload_len)
+        }
+    }
+}
+```
+
+This function receives a slice for the previously defined `BitVec` (`Bits` is a type alias for convenience), and returns the parsed `Packet` and its length in bits as an `usize`. Rather than pass indices around and operate on the whole `BitVec`, I thought it was more convenient to leverage slices and always pass a slice to `parse_packet()` which begins on the first bit of the packet we want to read.
+
+We parse the first and second groups of three bits to get the packet version and the type and, depending on the type, we rely on more specialized functions to parse either a literal value, or the list of other packets contained within it. Those functions also return the length of the read portion of the slice, to which we add `6` to account for the packet header.
+
+the `parse_literal()` function receives a bit slice that begins on the number to be parsed, and reads the slice in increments of five bits to construct it, using the first bit of each chunk as the stop condition:
+
+```rust
+fn parse_literal(bits: &Bits) -> (u64, usize) {
+    let (mut val, mut pos) = (0, 0);
+    let mut keep_reading = true;
+
+    while keep_reading {
+        keep_reading = bits[pos];
+        val <<= 4;
+        val |= bits[pos+1..pos+5].load_be::<u64>();
+        pos += 5;
+    }
+
+    (val, pos)
+}
+```
+
+On the other hand, the `parse_operation()` is a bit more complicated. It indicates the length of the inner packets in one of two ways: by total number of bits, or by number of packets. To parse such packets, we must identify the type of length, the length itself (whose size in bits is variable), and parse the corresponding packets:
+
+```rust
+fn parse_operation(bits: &Bits) -> (Vec<Packet>, usize) {
+    let mut payload = vec![];
+    let (len_type, mut pos, len) = if bits[0] {
+        (LengthType::NPackets, 12, bits[1..12].load_be())
+    } else {
+        (LengthType::BitLength, 16, bits[1..16].load_be())
+    };
+
+    let mut keep_reading = true;
+    while keep_reading {
+        let (pkt, size) = parse_packet(&bits[pos..]);
+        payload.push(pkt);
+        pos += size;
+        keep_reading = match len_type {
+            LengthType::NPackets => payload.len() < len,
+            LengthType::BitLength => pos - 16 < len,
+        }
+    };
+
+    (payload, pos)
+}
+```
+
+The process of reading packets can be generalized for both types of length indications. If we are given the number of packets, we keep reading until the payload reaches the desired size. If we have the number of bits, we keep reading while the bit size of the payload is less than the indicated one. In this case, we do keep an indication of the current position from which to start reading a packet in the payload. It starts right after the length, and we update it after every read packet, since `parse_packet()` returns the number of bits read. We use it to always provide slices that begin in the initial position of the packet to read.
+
+Once the parsing is done, we can implement a couple of methods to `Packet` to solve both parts:
+
+```rust
+impl Packet {
+    fn sum_versions(&self) -> u64 {
+        match &self {
+            Packet::Literal { version, .. } => *version,
+            Packet::Operation { version, payload, .. } => *version + payload.iter().map(|pkt| pkt.sum_versions()).sum::<u64>(),
+        }
+    }
+
+    fn get_value(&self) -> u64 {
+        match &self {
+            Packet::Literal { value, .. } => *value,
+            Packet::Operation { type_id, payload, .. } => match type_id {
+                0 => payload.iter().map(|pkt| pkt.get_value()).sum(),
+                1 => payload.iter().map(|pkt| pkt.get_value()).product(),
+                2 => payload.iter().map(|pkt| pkt.get_value()).min().unwrap(),
+                3 => payload.iter().map(|pkt| pkt.get_value()).max().unwrap(),
+                5 => (payload[0].get_value() > payload[1].get_value()) as u64,
+                6 => (payload[0].get_value() < payload[1].get_value()) as u64,
+                7 => (payload[0].get_value() == payload[1].get_value()) as u64,
+                _ => unreachable!()
+            },
+        }
+    }
+}
+```
+
+Today's problem was fun, except for the fact that it was a nightmare to debug. I probably spent 80% of the time reading `BitVec`'s docs trying to find out how the hell to convert from a slice of bits to a number, and then trying to find out what the hell was wrong with my code. Turns out, I was using `load()` instead of `load_be()`, which was transforming bits to numbers using the wrong endianness. But after all, it turned out to be a very performant solution:
+
+![Day 16 results](imgs/d16.png)
