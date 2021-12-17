@@ -9,7 +9,7 @@ use rustc_hash::FxHashMap;
 
 type CoordItem = i32;
 type Coord = (CoordItem, CoordItem);
-const MOVE_DIRS: [Coord; 4] = [(1, 0), (-1, 0), (0, 1), (0, -1)]; 
+const MOVE_DIRS: [Coord; 4] = [(1, 0), (0, 1), (-1, 0), (0, -1)]; 
 
 struct CaveInfo {
     data: Vec<u32>,
