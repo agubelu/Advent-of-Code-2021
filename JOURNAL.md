@@ -24,6 +24,9 @@ Of course, expect spoilers if you keep reading!
 * **[Day 14](#day-14):** 0.1283 ms
 * **[Day 15](#day-15):** 30.8155 ms
 * **[Day 16](#day-16):** 0.1156 ms
+* **[Day 17](#day-17):** 0.3107 ms
+* **[Day 18](#day-18):** 117.0816 ms
+* **[Day 19](#day-19):** 829.9844 ms
 
 ---
 
@@ -1689,3 +1692,465 @@ impl Packet {
 Today's problem was fun, except for the fact that it was a nightmare to debug. I probably spent 80% of the time reading `BitVec`'s docs trying to find out how the hell to convert from a slice of bits to a number, and then trying to find out what the hell was wrong with my code. Turns out, I was using `load()` instead of `load_be()`, which was transforming bits to numbers using the wrong endianness. But after all, it turned out to be a very performant solution:
 
 ![Day 16 results](imgs/d16.png)
+
+# Day 17
+
+I think today's puzzle doesn't really have much to it, to make up for the previous ones. We are given a target zone in a 2D space, and we must launch a probe with the necessary horizontal and vertical velocity so that it arrives to the target zone after any number of steps. On every step, the horizontal and vertical velocities are added to the probe's X and Y position, and the velocities change. The horizontal velocity decreases by 1 on every step, to account for drag, until it's 0. The vertical velocity keeps decreasing by 1 indefinitely to account for gravity.
+
+Let's represent both coordinates and the target zone like this:
+
+```rust
+struct Coord {
+    x: i16,
+    y: i16,
+}
+
+struct TargetZone {
+    top_left: Coord,
+    bottom_right: Coord
+}
+```
+
+The target is a rectangle, so we can model it using its top-left and bottom-right coordinates.
+
+At first I over-engineered this problem a bit, coding some custom iterators and everything, but I decided to simplyfy everything. I added a method to `Coord` that determines if a probe launched in that coordinate reaches the target after every number of steps, using some provided velocity:
+
+```rust
+impl Coord {
+    pub fn hits_target(&self, speed: &Coord, target: &TargetZone) -> bool {
+        let (mut speedx, mut speedy) = (speed.x, speed.y);
+        let (mut posx, mut posy) = (self.x, self.y);
+
+        while posx + speedx <= target.bottom_right.x && posy + speedy >= target.bottom_right.y {
+            posx += speedx;
+            posy += speedy;
+            if speedx > 0 {
+                speedx -= 1;
+            }
+            speedy -= 1;
+        }
+
+        posx >= target.top_left.x && posx <= target.bottom_right.x &&
+        posy <= target.top_left.y && posy >= target.bottom_right.y
+    }
+}
+```
+
+The velocity can be modelled as a coordinate too, where `x` and `y` are the corresponding components. The logic is relatively simple: we keep updating everything on steps, until the position is on or past the target.
+
+I think the main way to save time here is to decide which velocities to try. In Part 1, we are asked to find the 2D velocity that makes a probe located in `(0, 0)` reach the target while achieving the highest possible velocity on its path there. However, there are theoretically infinite velocities that we could try. How do we establish some upper and lower bounds?
+
+Let's start with the vertical velocity. Its minimum possible value is that of the lowest `y` coordinate of the target area, since any lower (aka, more negative) vertical velocity would vertically overshoot the target on the first step. What about the maximum one? Well, let's consider something. An initial vertical velocity of `3` goes through the following changes through the different steps: `3`, `2`, `1`, `0`, `-1`, `-2`, `-3`, `-4`, and so on. Since the probe starts at `(0, 0)`, a vertical velocity of `y` means that it takes the probe `2y` steps until it reaches the `y=0` coordinate again: enough for its height to increase to the maximum, and then go back again. With this knowledge, we can deduce that half of the maximum `x` coordinate of the target is an acceptable upper bound for the `y` speed, in the way that it will never be lower than the actual highest possible velocity that reaches the target. Why? Because if `y_vel = max_x / 2`, as discussed, it takes `2*y_vel = max_x` steps until the `y` coordinate reaches `0` again after the ascent. Under an absolute minimum velocity of 1 `x` per second, it would be enough to reach `y = 0` at the exact same step the `x` coordinate reaches the maximum possible value within the target. As stated, this can possibly be optimized, but it's good enough. 
+
+What about the `x` velocity? Again, the maximum possible one is `x_max`, the maximum `x` within the target, as anything higher than that overshoots the target horizontally on the first step. The minimum velocity can be calculated through some easy math. What's the maximum horizontal position the probe can reach with a given starting velocity? If it starts with a horizontal velocity of `3`, the final horizontal position before the hor. speed reaches 0 would be `3 + 2 + 1`. In general, a horizontal velocity of `x` results in a final horizontal position of `1 + 2 + ... + x`. This sum can also be calculated as `x*(x+1) / 2`. The minimum horizontal velocity would be that one which ends up right at the minimum `x` coordinate of the target, which I will call `x_min`, before the velocity turns 0. So, we must find a velocity value of `x` such that `x * (x+1) / 2 = x_min`. After fidding with the equation a bit and solving the associated quadratic for the positive value, we get that `x = (-1 + sqrt(1 + 8x_min)) / 2`. 
+
+After this little wall of text, we can basically solve the problem like this:
+
+```rust
+pub fn solve() -> SolutionPair {
+    let input = read_to_string("input/day17.txt").unwrap();
+    let target = TargetZone::from_string(&input);
+    let initial_pos = Coord::new(0, 0);
+
+    let min_xspeed = (-1 + (1.0 + 8.0 * target.top_left.x as f32).sqrt() as CoordElem) / 2;
+    let max_xspeed = target.bottom_right.x;
+    let min_yspeed = target.bottom_right.y;
+    let max_yspeed = target.bottom_right.x / 2;
+
+    let speeds = (min_xspeed..max_xspeed + 1).into_iter()
+        .flat_map(move |xs| (min_yspeed..max_yspeed + 1).into_iter().map(move |ys| (xs, ys)))
+        .filter_map(|(xs, ys)| {
+            let speed = Coord::new(xs, ys);
+            if initial_pos.hits_target(&speed, &target) { Some(speed) } else { None }
+        })
+        .collect_vec();
+
+    let sol2 = speeds.len();
+    let sol1 = speeds.into_iter()
+        .filter_map(|Coord {y, ..}| if y > 0 { Some(y * (y+1) / 2) } else { None })
+        .max().unwrap();
+
+    (Solution::Int(sol1 as i64), Solution::UInt(sol2 as u64))
+}
+```
+
+For a total of...
+
+![Day 17 results](imgs/d17.png)
+
+# Day 18
+
+Wow. Today was the first problem that I actually found annoying. It was a bit frustrating because at times I felt like I was having more trouble with the actual implementation than with the conceptual solution, which is really not common.
+
+To summarize, we have a tree of pairs of sums. Each element of the tree can either be a pair of elements, or a single value. That tree must be modified in certain ways before it is actually used to do some calculations.
+
+I had two main problems with today's solution:
+
+- The algorithm involved navigating up in the tree, which requires pointers to the parent nodes, which are a pain in the ass in Rust because of the ownership rules.
+- The algorithm also involved modifying the tree as I was navigating it, which is also a major pain in the ass in Rust due to the borrowing rules.
+
+This is how I solved both:
+
+- Rather than navigating up in the tree to find some elements, I found a way to implement the solution using only pure recursion, and passing messages upwards in the stack call.
+- Rather than implementing a mutable iterator for the tree, which was both annoying and I wasn't sure if it would actually work, I used an interior mutability pattern.
+
+Let's start with that last part first:
+
+The tree structure itself is very simple, and can be represented with an enum like this:
+
+```rust
+enum Node {
+    Value { val: u64 },
+    Pair { left: Box<Node>, right: Box<Node> }
+}
+```
+
+If you are not familiar with Rust, it requires all types to have a known size at compilation time. However, this is a *recursive* type: a `Node` can contain mode `Node`s. How many? It's impossible to tell at compile time, and so, its size would be too. `Box<T>` is simply an indirection, an owning pointer to an element in memory. That way, recursive types like this can have a known size.
+
+However, as I said, I need to modify the contents of a node as I am travelling inside the tree. The previous type would make it impossible because, to traverse the tree, I would have to borrow a parent node immutably, and then possibly borrow one of its children mutably, which is forbidden because then the parent would be modified (which it cannot, since it was borrowed immutably in the first place). I was already frustrated enough to implement a mutable iterator, so I decided to do this:
+
+```rust
+type MutBox<T> = RefCell<Box<T>>;
+
+enum Node {
+    Value { val: MutBox<u64> },
+    Pair { left: MutBox<Node>, right: MutBox<Node> }
+}
+```
+
+A `RefCell` implements something known as *interior mutability*. It is a way to enforce borrowing rules at runtime, when we want to do something that will actually be memory safe, but the compiler has no way to know. It dynamically keeps track of the borrows of its content, and if the usual borrowing rules are violated, it panics. So, we can use it to mutably borrow its contents and change them, as long as no other borrows to them exist. That should be the case, since we will be doing a DFS search on the tree, and the changes will be done recursively.
+
+Speaking of recursion, let's talk about the problem a bit. There are basically two operations that we must do: *split* a value greater than 10, to convert it into a pair of two values, or *explode* a pair, summing their contents to the closest numbers to the right and left.
+
+Splitting a node is pretty easy, and can actually be implemented as a method for `Node`:
+
+```rust
+impl Node {
+    pub fn split(&mut self) {
+        match self {
+            Node::Value { val } => {
+                let f = *val.borrow_mut().as_mut() as f32 / 2.0;
+                let left = Node::Value { val: RefCell::new(Box::new(f.floor() as u64)) };
+                let right = Node::Value { val: RefCell::new(Box::new(f.ceil() as u64)) };
+                *self = Node::Pair { left: Node::new(left), right: Node::new(right) }
+            },
+            Node::Pair { .. } => unreachable!(),
+        }
+    }
+}
+```
+
+We can clearly see some of the disadvantages of this solution: The double indirection means that there's a lot of news, unwraps, borrows, and so on.
+
+Now, let's see how to do explodes recursively, without the need for pointers to parent nodes. To sum it up, we must:
+
+1. Look for a pair of values (**not** a pair which contains another pair) that is nested at least 4 levels deep.
+2. Explode the first such pair by summing its left value to the closest value left to it, if any, and its right value to its closest value right to it, if any.
+3. Turn the pair into the value `0`.
+
+We do that operation recursively while travelling on a DFS search on the tree. Let's see the code and I will explain it a bit:
+
+```rust
+enum ProcessResult {
+    Changed,
+    Noop,
+    MustExplode { right: u64, left: u64 },
+    MustAddRight { val: u64 },
+    MustAddLeft { val: u64 }
+}
+
+fn do_explodes(node: &MutBox<Node>, depth: u32) -> ProcessResult {
+    // Deal with the base cases first
+    if depth >= 4 && node.borrow().is_perfect_pair() {
+        // We must explode this node
+        let (left, right) = node.borrow().get_val_pair();
+        node.borrow_mut().set_zero();
+        return ProcessResult::MustExplode { left, right }
+    } else if node.borrow().is_value() {
+        // We don't have to do anything to this node
+        return ProcessResult::Noop;
+    }
+
+    // This node is not a stop condition. Process the left side first
+    let resl = do_explodes(node.borrow().get_node(Dir::Left), depth + 1);
+
+    match resl {
+        ProcessResult::Changed => return resl,
+        ProcessResult::MustExplode { left, right } => {
+            // The left child node just exploded. We must increment the rightmost
+            // value, which we have access to, and ask the parent caller to
+            // increment the leftmost one
+            node.borrow().get_node(Dir::Right).borrow().increment_leftmost(right);
+            return ProcessResult::MustAddLeft{ val: left}
+        },
+        ProcessResult::MustAddRight { val } => {
+            // We received a petition from the left child to increment the rightmost value
+            // We can do that, since we have access to the right child
+            node.borrow().get_node(Dir::Right).borrow().increment_leftmost(val);
+            return ProcessResult::Changed;
+        },
+        ProcessResult::MustAddLeft { .. } => {
+            // We received a petition from the left child to increment the leftmost value
+            // We can't do that, so we pass it on to the caller
+            return resl;
+        },
+        ProcessResult::Noop => {},
+    };
+    
+    // If nothing interesting happened, process the right child
+    let resr = do_explodes(node.borrow().get_node(Dir::Right), depth + 1);
+
+    match resr {
+        ProcessResult::Changed => resr,
+        ProcessResult::MustExplode { left, right } => {
+            // The right child node just exploded. We must increment the leftmost
+            // value, which we have access to, and ask the parent caller to
+            // increment the rightmost one
+            node.borrow().get_node(Dir::Left).borrow().increment_rightmost(left);
+            ProcessResult::MustAddRight{ val: right}
+        },
+        ProcessResult::MustAddRight { .. } => {
+            // We received a petition from the right child to increment the rightmost value
+            // We can''t do that so we pass on the problem to the caller
+            resr
+        },
+        ProcessResult::MustAddLeft { val } => {
+            // We received a petition from the right child to increment the leftmost value
+            // We can do that! :D
+            node.borrow().get_node(Dir::Left).borrow().increment_rightmost(val);
+            return ProcessResult::Changed
+        },
+        ProcessResult::Noop => resr,
+    }
+}
+```
+
+Arguably it's not as long without the comments, but I had to add them so I wouldn't go insane while coding this thing. The problem is the following: to find the nearest values to the right and left when a pair explodes, I need to travel up the tree, but I didn't wanna have references to parent nodes. So, I created this recursive function which returns somewhat of a status code that informs the caller of what happened to the node they just processed. The options are:
+
+- *Changed*: a change occured somewhere inside the call stack, but it has been dealt with and nothing else needs to be done. If this happens, we don't call recursively on the right side of the pair, because we must only make one change at a time.
+- *Noop*: nothing happened yet, keep processing.
+- *MustExplode*: the children node which we just processed has exploded, and we must handle the sums right and left. Depending on which side (right or left) of the current pair that happened, we can deal with one of the changes directly, since the value to be changed is down the other child. The other sum that must be done, which we don't have access to, is passed on to the parent called, which is informed of which side the number must be added, using either `MustAddRight` or `MustAddLeft`.
+
+The function to do splits works similarly, but it's not as complicated:
+
+```rust
+fn do_splits(node: &MutBox<Node>) -> ProcessResult {
+    // Deal with the base cases first
+    if node.borrow().can_split() {
+        node.borrow_mut().split();
+        return ProcessResult::Changed;
+    } else if node.borrow().is_value() {
+        // We don't have to do anything to this node
+        return ProcessResult::Noop;
+    }
+
+    // This node is not a stop condition. Process the left side first
+    let resl = do_splits(node.borrow().get_node(Dir::Left));
+    if let ProcessResult::Changed = resl {
+        return resl;
+    }
+    
+    // If nothing interesting happened, process the right child
+    do_splits(node.borrow().get_node(Dir::Right))
+}
+```
+
+Then, I made a function to process a root node according to the rules until there are no more changes left:
+
+```rust
+fn process_node(node: &MutBox<Node>) {
+    while {
+        while do_explodes(node, 0) != ProcessResult::Noop {}
+        do_splits(node) != ProcessResult::Noop
+    } {}
+}
+```
+
+That's not nearly it, this was the day where I wrote the most lines of codes by large. It was just *annoying*. To top it all, I had to use somewhat expensive clones for part 2, because `Box<T>` is not `Copy`.
+
+I'll spare you from the rest of the code and just show the solution:
+
+```rust
+pub fn solve() -> SolutionPair {
+    let input = read_to_string("input/day18.txt").unwrap();
+    let nodes = input.lines()
+        .map(|line| parse_node(line).0)
+        .collect_vec();
+
+    let sol1 = nodes.iter().cloned()
+        .reduce(|a, b| {
+            let node = Node::new(Node::Pair { left: a, right: b });
+            process_node(&node);
+            node
+        }).unwrap().borrow().magnitude();
+
+    let sol2 = nodes.iter().combinations(2)
+        .flat_map(|nodes| {
+            let node1 = Node::new(Node::Pair { left: nodes[0].clone(), right: nodes[1].clone() });
+            let node2 = Node::new(Node::Pair { left: nodes[1].clone(), right: nodes[0].clone() });
+            process_node(&node1);
+            process_node(&node2);
+            vec![node1, node2].into_iter()
+        })
+        .map(|node| node.borrow().magnitude())
+        .max().unwrap();
+
+    (Solution::UInt(sol1), Solution::UInt(sol2))
+}
+```
+
+It's slow as fuck for a task that's not even that computationally complex, but I just want to be done with it.
+
+![Day 18 results](imgs/d18.png)
+
+# Day 19
+
+Oh boy. Today was one of those fun days. To summarize: we have several scanners, each of which report a list of 3D positions of beacons. Those positions are relative to the scanners, and some of the scanner ranges overlap, so there are shared beacons. To make things more interesting, we don't know the coordinates of the scanners either, and they can be in one out of 24 possible rotations in 3D, which affect the sign and coordinates of their readings.
+
+Differently to other days, the problem statement doesn't give you any sort of guide or algorithm to solve this task. They just tell you "hey, some of these beacons can be matched between scanners, find out how", and leave you to it.
+
+I'll explain my solution first, and then go to the implementation details. I realized that, when the readings of two sensors are in the same rotation, those coordinates that refer to the same beacon in two different sensors can be used to determine the position of the sensors. More specifically, if we use one sensor in (0, 0, 0) as reference, the difference of the coordinates of the relative positions of the beacon relative to the two sensors will give the coordinates of the second sensor relative to the third.
+
+To do that, we basically try all possible sensors against a reference one (it can be sensor #0, which we will assume to be at (0, 0, 0)), in all possible orientations for the second one's readings, and we get the differences of all the readings in the first sensor against all the readings in the second, using a cartesian product. If the same coordinate appears more than 12 times, we assume that the sensors overlap, and those coordinates are that of the second sensor. We then use its known coordinates to calculate the actual positions of all beacon readings, and add them to our reference sensor. The process keeps going until we have figured out the position of all sensors.
+
+To do this, I decided to spare myself the misery of manually writing rotation functions for the 24 possible cases and just use matrices. I remember from one of my CS courses that there are certain rotation matrices that, when multiplied with another matrix that contains coordinates as its rows, produces the rotated versions of said coordinates. Very handy! I looked up for some decent library to work with matrices in Rust, found the [ndarray](https://docs.rs/ndarray/latest/ndarray/) crate and decided to give it a try.
+
+Thanks to our lord and savior Stack Overflow, I found [a question where someone asked for the exact same matrices](https://stackoverflow.com/a/50546727). By combining two of the answers, I wrote this function that calculates them, instead of hardcoding them:
+
+```rust
+fn calculate_rot_mat() -> Vec<CoordMat> {
+    // thanks to https://stackoverflow.com/a/50546727 and https://stackoverflow.com/a/16453299
+    let rots = vec!["I", "X", "Y", "XX", "XY", "YX", "YY", "XXX", "XXY", "XYX", "XYY", "YXX", "YYX", "YYY", "XXXY", "XXYX", "XXYY", "XYXX", "XYYY", "YXXX", "YYYX", "XXXYX", "XYXXX", "XYYYX"];
+    let i = arr2(&[[1, 0, 0], [0, 1, 0], [0, 0, 1]]);
+    let x = arr2(&[[1, 0, 0], [0, 0, -1], [0, 1, 0]]);
+    let y = arr2(&[[0, 0, 1], [0, 1, 0], [-1, 0, 0]]);
+
+    rots.into_iter().map(|s| s.chars().fold(i.clone(), |acc, ch| {
+        let mat = match ch {
+            'I' => &i,
+            'X' => &x,
+            'Y' => &y,
+             _  => unreachable!()
+        };
+        acc.dot(mat)
+    })).collect_vec()
+}
+```
+
+Where `CoordMat` is simply a type alias for a 2D array of signed 32 bit integers.
+
+So, we can store the data about the sensors and their readings using these structs:
+
+```rust
+struct Scanner {
+    rel_coords: Option<Coord>,
+    readings: CoordMat
+}
+```
+
+Again, `Coord` is just `[i32; 3]`. Each sensor has a matrix with 3 columns and their readings as rows, and an optional position. They are `None` until we figure them out.
+
+Let's see how to determine if two matrices of readings contain shared beacons, and if they do, get the position of the scanner:
+
+```rust
+fn find_shared_coord(resolved: &CoordMat, readings: &CoordMat) -> Option<Coord> {
+    let mut map = FxHashMap::default();
+    for row in readings.rows() {
+        let diffs = resolved - &row;
+        for row_diff in diffs.rows() {
+            let cnt = map.entry(row_diff.into_owned()).or_insert(0);
+            if *cnt == 11 {
+                return Some([row_diff[0], row_diff[1], row_diff[2]]);
+            } else {
+                *cnt += 1;
+            }
+        }
+    }
+
+    None
+}
+```
+
+This is simply an implementation of the previously described process, and we stop as soon as we find that a certain coordinate repeats 12 times.
+
+Ok, let's start solving the shit out of this. We'll need to load the sensors and their data, and the 24 rotation matrices...
+
+```rust
+pub fn solve() -> SolutionPair {
+    let input = read_to_string("input/day19.txt").unwrap();
+    let mut scanners = input.split(SPLITTER).map(Scanner::from_string).collect_vec();
+    
+    scanners[0].rel_coords = Some([0, 0, 0]);
+    let mut resolved_beacons = scanners[0].readings.clone();
+
+    let rotation_matrices = calculate_rot_mat();
+    [...]
+}
+```
+
+...and I will also keep the coordinates of the resolved beacons in a set. This is due to the fact that, when we resolve the position of a scanner, it will contain some beacons that we know about, and some that we don't. I didn't want to add repeated rows to the matrix of known beacons, since the required cartesian products would grow even larger, so I keep an updated set with them to quickly look up which ones we know already.
+
+
+```rust
+pub fn solve() -> SolutionPair {
+    [...]
+    let mut resolved_set = FxHashSet::default();
+
+    for row in resolved_beacons.rows() {
+        resolved_set.insert([row[0], row[1], row[2]]);
+    }
+    [...]
+}
+```
+
+Now, let's get to business. We'll do as we said, go through all scanners and try all possible rotations on them, until we resolve them all:
+
+```rust
+while scanners.iter().any(|s| s.rel_coords.is_none()) {
+    for scanner in scanners.iter_mut() {
+        if scanner.rel_coords.is_some() {
+            continue;
+        }
+
+        let coords_find = rotation_matrices.par_iter().find_map_any(|rot_mat| {
+            let readings = scanner.readings.dot(rot_mat);
+            find_shared_coord(&resolved_beacons, &readings).map(|coords| (coords, readings))
+        });
+
+        if let Some((coords, readings)) = coords_find {
+            scanner.rel_coords = Some(coords);
+            update_beacons(&mut resolved_beacons, &mut resolved_set, &(readings + &arr2(&[coords])));
+            break;
+        }
+    }
+}
+```
+
+Let me tell you something: when I first solved it, the runtime was a bit above 1 second. So I decided to take the lazy path to optimization, and multithread the process of trying all possible rotations. Thanks to the amazing [rayon crate](https://docs.rs/rayon/latest/rayon/), we can use `.par_iter()` to turn pretty much any iterator into one that will be ran multithreadedly. This requires a couple of tweaks, such as using `find_map_any()`, which does a few things. The `map` part means that we get to transform an item in the iterator into something else. That something else is an `Option`, and the `find_any` bit will return a value which is not `None` if it can be found, or `None` if everything turns out to be `None`. Note that there's also `find_first()`, which guarantees that the returned result will be the first one in iteration order, but we don't need that since there will be one result at most, so we don't need to wait for previous iterations to finish.
+
+Finally, `update_beacons()` simply updates the sets of beacons that we know:
+
+```rust
+fn update_beacons(resolved_mat: &mut CoordMat, resolved_set: &mut FxHashSet<Coord>, new: &CoordMat) {
+    for row in new.rows() {
+        let row_arr = [row[0], row[1], row[2]];
+        if !resolved_set.contains(&row_arr) {
+            resolved_set.insert(row_arr);
+            resolved_mat.push_row(row).unwrap();
+        }
+    }
+}
+```
+
+And we can use the coordinates of all scanners, which we now know, to calculate part 2 in a one-liner:
+
+```rust
+let sol1 = resolved_set.len() as u64;
+let sol2 = scanners.iter().tuple_combinations().map(|(s1, s2)| s1.dist_to(s2)).max().unwrap();
+```
+
+Now... the results. The computational complexity of having to compare and count all possible pairs really takes a toll:
+
+![Day 19 results](imgs/d19.png)
+
+This day singlehandedly almost screwed up my goal of running all days combined in under 1s. There's still some margin left, but I'll surely have to come back to this and find some kind of clever optimization to reduce the runtime.
